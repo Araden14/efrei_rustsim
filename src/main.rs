@@ -15,13 +15,24 @@ use world::SharedWorld;
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    let world = Arc::new(RwLock::new(SharedWorld::new(Map::empty(60, 30))));
+    let mut terminal = ratatui::init();
+    let size = terminal.size()?;
+    // map_area is the frame minus the 1-row status line; the bordered block then
+    // eats 1 char on every side, so subtract 3 rows / 2 cols to match ui::render's layout exactly.
+    let map_width = size.width.saturating_sub(2).max(10) as i32;
+    let map_height = size.height.saturating_sub(3).max(10) as i32;
+
+    let seed: u32 = rand::random();
+    let world = Arc::new(RwLock::new(SharedWorld::new(Map::generate(
+        map_width,
+        map_height,
+        seed,
+    ))));
 
     let (tx, rx) = tokio::sync::mpsc::channel::<RobotMessage>(100);
     let _tx = tx; // ponytail: kept alive so the base task doesn't exit; no robots send on it yet.
     tokio::spawn(base::run(world.clone(), rx));
 
-    let mut terminal = ratatui::init();
     let result = run(&mut terminal, world).await;
     ratatui::restore();
     result
