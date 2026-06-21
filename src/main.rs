@@ -1,11 +1,8 @@
-mod base;
 mod map;
-mod robot;
 mod ui;
 mod world;
 
 use map::Map;
-use robot::RobotMessage;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -28,10 +25,6 @@ async fn main() -> color_eyre::Result<()> {
         map_height,
         seed,
     ))));
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<RobotMessage>(100);
-    let _tx = tx; // ponytail: kept alive so the base task doesn't exit; no robots send on it yet.
-    tokio::spawn(base::run(world.clone(), rx));
 
     let result = run(&mut terminal, world).await;
     ratatui::restore();

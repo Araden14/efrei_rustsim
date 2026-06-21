@@ -24,8 +24,7 @@ pub struct Map {
     cells: Vec<Cell>,
 }
 
-const RESOURCES_PER_KIND: u32 = 10;
-const RESOURCE_QTY_RANGE: std::ops::RangeInclusive<u32> = 50..=200;
+const RESOURCES_PER_KIND: usize = 10;
 const OBSTACLE_THRESHOLD: f64 = 0.25;
 const NOISE_SCALE: f64 = 0.12;
 
@@ -33,7 +32,7 @@ impl Map {
     pub fn generate(width: i32, height: i32, seed: u32) -> Self {
         use noise::{NoiseFn, Perlin};
 
-        let base = Pos { x: width / 2, y: height / 2 };
+        let base = Self::base_pos_for(width, height);
         let perlin = Perlin::new(seed);
         let mut cells: Vec<Cell> = (0..height)
             .flat_map(|y| {
@@ -61,20 +60,20 @@ impl Map {
     }
 
     fn scatter_resources(&mut self, seed: u32) {
-        use rand::{Rng, SeedableRng, rngs::StdRng};
+        use rand::{Rng, SeedableRng, rngs::StdRng, seq::IteratorRandom};
 
         let mut rng = StdRng::seed_from_u64(u64::from(seed) ^ 0x5EED);
         for kind in [ResourceKind::Energy, ResourceKind::Crystal] {
-            let mut placed = 0;
-            let mut attempts = 0;
-            while placed < RESOURCES_PER_KIND && attempts < RESOURCES_PER_KIND * 100 {
-                attempts += 1;
-                let idx = rng.random_range(0..self.cells.len());
-                if self.cells[idx] == Cell::Empty {
-                    let qty = rng.random_range(RESOURCE_QTY_RANGE.clone());
-                    self.cells[idx] = Cell::Resource(kind, qty);
-                    placed += 1;
-                }
+            let empty_indices = self
+                .cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| **c == Cell::Empty)
+                .map(|(i, _)| i)
+                .choose_multiple(&mut rng, RESOURCES_PER_KIND);
+            for idx in empty_indices {
+                let qty = rng.random_range(50..=200);
+                self.cells[idx] = Cell::Resource(kind, qty);
             }
         }
     }
@@ -86,8 +85,8 @@ impl Map {
         Some(self.cells[(pos.y * self.width + pos.x) as usize])
     }
 
-    pub fn base_pos(&self) -> Pos {
-        Pos { x: self.width / 2, y: self.height / 2 }
+    fn base_pos_for(width: i32, height: i32) -> Pos {
+        Pos { x: width / 2, y: height / 2 }
     }
 }
 
@@ -98,11 +97,11 @@ mod tests {
     #[test]
     fn generate_places_base_obstacles_and_resources() {
         let map = Map::generate(60, 30, 42);
-        assert_eq!(map.get(map.base_pos()), Some(Cell::Base));
+        assert_eq!(map.get(Map::base_pos_for(map.width, map.height)), Some(Cell::Base));
 
-        let mut obstacles = 0;
-        let mut energy = 0;
-        let mut crystal = 0;
+        let mut obstacles = 0usize;
+        let mut energy = 0usize;
+        let mut crystal = 0usize;
         for y in 0..map.height {
             for x in 0..map.width {
                 match map.get(Pos { x, y }).unwrap() {
