@@ -1,4 +1,4 @@
-use crate::map::Cell;
+use crate::map::{Cell, Pos};
 use crate::world::SharedWorld;
 use ratatui::{
     Frame,
@@ -28,8 +28,14 @@ pub fn render(frame: &mut Frame, world: &SharedWorld) {
         .map(|y| {
             let spans: Vec<Span> = (0..map.width)
                 .map(|x| {
-                    let cell = map.get(crate::map::Pos { x, y }).unwrap_or(Cell::Empty);
-                    let (glyph, color) = cell_glyph(cell);
+                    let pos = Pos { x, y };
+                    let (glyph, color) = if world.scout_positions.contains(&pos) {
+                        ('x', Color::White)
+                    } else if world.collector_positions.contains(&pos) {
+                        ('o', Color::LightBlue)
+                    } else {
+                        cell_glyph(map.get(pos).unwrap_or(Cell::Empty))
+                    };
                     Span::styled(glyph.to_string(), Style::default().fg(color))
                 })
                 .collect();
