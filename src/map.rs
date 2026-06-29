@@ -85,6 +85,12 @@ impl Map {
         Some(self.cells[(pos.y * self.width + pos.x) as usize])
     }
 
+    pub fn set(&mut self, pos: Pos, cell: Cell) {
+        if pos.x >= 0 && pos.y >= 0 && pos.x < self.width && pos.y < self.height {
+            self.cells[(pos.y * self.width + pos.x) as usize] = cell;
+        }
+    }
+
     pub fn base_pos(&self) -> Pos {
         Self::base_pos_for(self.width, self.height)
     }
