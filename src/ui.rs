@@ -1,47 +1,66 @@
-use crate::map::Cell;
-use crate::world::SharedWorld;
+use crate::map::{Cell, Pos};
+use crate::robot::RobotType;
+use crate::world::World;
 use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Block, Paragraph},
+    prelude::*,
+    widgets::{Block, Borders, Paragraph},
 };
 
-fn cell_glyph(cell: Cell) -> (char, Color) {
-    match cell {
-        Cell::Empty => (' ', Color::Reset),
-        Cell::Obstacle => ('O', Color::LightCyan),
-        Cell::Resource(crate::map::ResourceKind::Energy, _) => ('E', Color::Green),
-        Cell::Resource(crate::map::ResourceKind::Crystal, _) => ('C', Color::LightMagenta),
-        Cell::Base => ('#', Color::LightGreen),
-    }
+pub fn render_ui(frame: &mut Frame, world: &World) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(3)])
+        .split(frame.area());
+
+    render_map(frame, world, chunks[0]);
+    render_stats(frame, world, chunks[1]);
 }
 
-pub fn render(frame: &mut Frame, world: &SharedWorld) {
-    let [map_area, status_area] =
-        Layout::new(Direction::Vertical, [Constraint::Min(0), Constraint::Length(1)])
-            .areas(frame.area());
+fn render_map(frame: &mut Frame, world: &World, area: Rect) {
+    let mut map_text = String::new();
 
-    let map = &world.map;
-    let lines: Vec<Line> = (0..map.height)
-        .map(|y| {
-            let spans: Vec<Span> = (0..map.width)
-                .map(|x| {
-                    let cell = map.get(crate::map::Pos { x, y }).unwrap_or(Cell::Empty);
-                    let (glyph, color) = cell_glyph(cell);
-                    Span::styled(glyph.to_string(), Style::default().fg(color))
-                })
-                .collect();
-            Line::from(spans)
-        })
-        .collect();
+    for y in 0..world.map.height {
+        for x in 0..world.map.width {
+            let pos = Pos { x, y };
+            let ch = if let Some(robot) = world.robots.iter().find(|robot| robot.pos == pos) {
+                match robot.robot_type {
+                    RobotType::Scout => 'x',
+                    RobotType::Collector => 'o',
+                }
+            } else if world.base.pos == pos {
+                '#'
+            } else {
+                match world.map.grid[y][x] {
+                    Cell::Empty => '.',
+                    Cell::Obstacle => 'O',
+                    Cell::Energy(_) => 'E',
+                    Cell::Crystal(_) => 'C',
+                }
+            };
 
-    frame.render_widget(Paragraph::new(lines).block(Block::bordered().title("resource-sim")), map_area);
+            map_text.push(ch);
+        }
+        map_text.push('\n');
+    }
 
-    let status = format!(
-        "energy: {}  crystal: {}  (any key to quit)",
-        world.energy_collected, world.crystal_collected
+    frame.render_widget(Paragraph::new(map_text), area);
+}
+
+fn render_stats(frame: &mut Frame, world: &World, area: Rect) {
+    let carried_energy: u32 = world.robots.iter().map(|robot| robot.carrying.0).sum();
+    let carried_crystals: u32 = world.robots.iter().map(|robot| robot.carrying.1).sum();
+    let stats = format!(
+        "Energy: {} (+{}) | Crystals: {} (+{}) | Discoveries: {} | Tick: {} | q/esc to quit",
+        world.base.total_energy,
+        carried_energy,
+        world.base.total_crystals,
+        carried_crystals,
+        world.base.discovered_resources.len(),
+        world.tick
     );
-    frame.render_widget(Paragraph::new(status), status_area);
+
+    frame.render_widget(
+        Paragraph::new(stats).block(Block::default().borders(Borders::ALL)),
+        area,
+    );
 }
