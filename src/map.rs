@@ -85,6 +85,10 @@ impl Map {
         Some(self.cells[(pos.y * self.width + pos.x) as usize])
     }
 
+    pub fn base_pos(&self) -> Pos {
+        Self::base_pos_for(self.width, self.height)
+    }
+
     fn base_pos_for(width: i32, height: i32) -> Pos {
         Pos { x: width / 2, y: height / 2 }
     }
