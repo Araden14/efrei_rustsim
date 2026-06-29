@@ -86,7 +86,11 @@ impl Map {
     }
 
     pub fn get(&self, pos: Pos) -> Option<Cell> {
-        self.in_bounds(pos).then_some(self.grid[pos.y][pos.x])
+        if self.in_bounds(pos) {
+            Some(self.grid[pos.y][pos.x])
+        } else {
+            None
+        }
     }
 
     pub fn set(&mut self, pos: Pos, cell: Cell) {
@@ -148,8 +152,8 @@ fn place_resources(
     count: usize,
 ) {
     for _ in 0..count {
-        let x = rand::random::<usize>() % width;
-        let y = rand::random::<usize>() % height;
+        let x = (rand::random::<u32>() as usize) % width;
+        let y = (rand::random::<u32>() as usize) % height;
 
         if grid[y][x] == Cell::Empty {
             let amount = 50 + (rand::random::<u32>() % 150);

@@ -5,9 +5,9 @@ mod ui;
 mod world;
 
 use ratatui::crossterm::{
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     event::{self, Event, KeyCode},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use std::io;
 use std::time::Duration;
@@ -20,8 +20,7 @@ async fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
 
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?
-        .with_cursor_visible(true);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
 
     let result = run_app(&mut terminal).await;
 

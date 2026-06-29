@@ -20,13 +20,13 @@ pub enum CollectorMode {
 #[derive(Clone, Debug)]
 pub enum RobotMessage {
     Discovered {
-        robot_id: u32,
+        _robot_id: u32,
         pos: Pos,
         kind: ResourceKind,
         amount: u32,
     },
     Collected {
-        robot_id: u32,
+        _robot_id: u32,
         kind: ResourceKind,
         amount: u32,
     },
@@ -82,7 +82,7 @@ impl Robot {
             (-1, 1),
         ];
 
-        let start = rand::random::<usize>() % DIRS.len();
+        let start = (rand::random::<u32>() as usize) % DIRS.len();
         for offset in 0..DIRS.len() {
             let (dx, dy) = DIRS[(start + offset) % DIRS.len()];
             let Some(x) = self.pos.x.checked_add_signed(dx) else {
@@ -103,7 +103,7 @@ impl Robot {
 
     pub fn collector_next_pos(&self, map: &Map, occupied: &HashSet<Pos>) -> Pos {
         let target = match self.mode {
-            CollectorMode::Returning => self.base_pos,
+            CollectorMode::Returning => Some(self.base_pos),
             CollectorMode::Seeking => self.closest_known_resource(),
         };
 
@@ -124,7 +124,7 @@ impl Robot {
             };
 
             let _ = self.tx.send(RobotMessage::Discovered {
-                robot_id: self.id,
+                _robot_id: self.id,
                 pos,
                 kind,
                 amount: cell.resource_amount(),
@@ -161,7 +161,10 @@ impl Robot {
             ResourceKind::Crystal => self.carrying.1 += amount,
         }
 
-        if map.get(self.pos).is_some_and(|cell| cell.resource_kind().is_none()) {
+        if map
+            .get(self.pos)
+            .is_some_and(|cell| cell.resource_kind().is_none())
+        {
             self.known_resources.remove(&self.pos);
         }
         self.mode = CollectorMode::Returning;
@@ -174,14 +177,14 @@ impl Robot {
 
         if self.carrying.0 > 0 {
             let _ = self.tx.send(RobotMessage::Collected {
-                robot_id: self.id,
+                _robot_id: self.id,
                 kind: ResourceKind::Energy,
                 amount: self.carrying.0,
             });
         }
         if self.carrying.1 > 0 {
             let _ = self.tx.send(RobotMessage::Collected {
-                robot_id: self.id,
+                _robot_id: self.id,
                 kind: ResourceKind::Crystal,
                 amount: self.carrying.1,
             });
@@ -221,12 +224,7 @@ impl PartialOrd for Node {
     }
 }
 
-fn astar_next_step(
-    map: &Map,
-    start: Pos,
-    goal: Pos,
-    occupied: &HashSet<Pos>,
-) -> Option<Pos> {
+fn astar_next_step(map: &Map, start: Pos, goal: Pos, occupied: &HashSet<Pos>) -> Option<Pos> {
     if start == goal {
         return Some(start);
     }

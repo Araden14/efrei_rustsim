@@ -26,10 +26,7 @@ impl Base {
         while let Ok(message) = self.rx.try_recv() {
             match message {
                 RobotMessage::Discovered {
-                    pos,
-                    kind,
-                    amount,
-                    ..
+                    pos, kind, amount, ..
                 } => {
                     if amount > 0 {
                         self.discovered_resources.insert(pos, kind);
