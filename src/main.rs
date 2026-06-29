@@ -29,11 +29,17 @@ async fn main() -> color_eyre::Result<()> {
 
     let base_pos = world.read().await.base_pos;
 
-    for _ in 0..scout_count {
-        tokio::spawn(robots::scout_loop(world.clone(), base_pos));
+    {
+        let mut w = world.write().await;
+        w.scout_positions = vec![base_pos; scout_count];
+        w.collector_positions = vec![base_pos; collector_count];
     }
-    for _ in 0..collector_count {
-        tokio::spawn(robots::collector_loop(world.clone(), base_pos));
+
+    for id in 0..scout_count {
+        tokio::spawn(robots::scout_loop(world.clone(), base_pos, id));
+    }
+    for id in 0..collector_count {
+        tokio::spawn(robots::collector_loop(world.clone(), base_pos, id));
     }
 
     let result = run(&mut terminal, world).await;
