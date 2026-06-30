@@ -22,8 +22,19 @@ async fn main() -> color_eyre::Result<()> {
     let world = Arc::new(RwLock::new(SharedWorld::new(Map::generate(viewport_width, viewport_height, seed))));
 
     let (tx, rx) = tokio::sync::mpsc::channel::<RobotMessage>(100);
-    let _tx = tx; // ponytail: kept alive so the base task doesn't exit; no robots send on it yet.
     tokio::spawn(base::run(world.clone(), rx));
+
+    // TODO (step 5 — remove before Phase 2 merge): temporary single scout for local testing.
+    {
+        let base_pos = world.read().await.map.base_pos();
+        let scout = robot::Robot::new_scout(0, base_pos, tx.clone());
+        {
+            let mut w = world.write().await;
+            w.robot_positions.insert(scout.id, scout.pos);
+            w.robot_kinds.insert(scout.id, robot::RobotKind::Scout);
+        }
+        tokio::spawn(robot::run_scout(scout, world.clone()));
+    }
 
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, world).await;
