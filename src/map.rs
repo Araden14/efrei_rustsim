@@ -1,166 +1,135 @@
-use noise::{NoiseFn, Perlin};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Pos {
-    pub x: usize,
-    pub y: usize,
+    pub x: i32,
+    pub y: i32,
 }
 
-impl Pos {
-    pub fn manhattan_distance(self, other: Pos) -> usize {
-        self.x.abs_diff(other.x) + self.y.abs_diff(other.y)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ResourceKind {
     Energy,
     Crystal,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cell {
     Empty,
     Obstacle,
-    Energy(u32),
-    Crystal(u32),
-}
-
-impl Cell {
-    pub fn resource_kind(self) -> Option<ResourceKind> {
-        match self {
-            Cell::Energy(_) => Some(ResourceKind::Energy),
-            Cell::Crystal(_) => Some(ResourceKind::Crystal),
-            _ => None,
-        }
-    }
-
-    pub fn resource_amount(self) -> u32 {
-        match self {
-            Cell::Energy(amount) | Cell::Crystal(amount) => amount,
-            _ => 0,
-        }
-    }
+    Resource(ResourceKind, u32),
+    Base,
 }
 
 pub struct Map {
-    pub width: usize,
-    pub height: usize,
-    pub grid: Vec<Vec<Cell>>,
+    pub width: i32,
+    pub height: i32,
+    cells: Vec<Cell>,
 }
 
+const RESOURCES_PER_KIND: usize = 10;
+const OBSTACLE_THRESHOLD: f64 = 0.25;
+const NOISE_SCALE: f64 = 0.12;
+
 impl Map {
-    pub fn new(width: usize, height: usize, seed: u32) -> Self {
+    pub fn generate(width: i32, height: i32, seed: u32) -> Self {
+        use noise::{NoiseFn, Perlin};
+
+        let base = Self::base_pos_for(width, height);
         let perlin = Perlin::new(seed);
-        let mut grid = vec![vec![Cell::Empty; width]; height];
+        let mut cells: Vec<Cell> = (0..height)
+            .flat_map(|y| {
+                (0..width).map(move |x| {
+                    let n = perlin.get([x as f64 * NOISE_SCALE, y as f64 * NOISE_SCALE]);
+                    if n > OBSTACLE_THRESHOLD { Cell::Obstacle } else { Cell::Empty }
+                })
+            })
+            .collect();
 
-        for y in 0..height {
-            for x in 0..width {
-                let nx = (x as f64) / (width as f64) * 4.0;
-                let ny = (y as f64) / (height as f64) * 4.0;
-
-                if perlin.get([nx, ny]) > 0.3 {
-                    grid[y][x] = Cell::Obstacle;
+        // keep the base and the tile ring around it walkable
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let p = Pos { x: base.x + dx, y: base.y + dy };
+                if p.x >= 0 && p.y >= 0 && p.x < width && p.y < height {
+                    cells[(p.y * width + p.x) as usize] = Cell::Empty;
                 }
             }
         }
+        cells[(base.y * width + base.x) as usize] = Cell::Base;
 
-        let base = Pos {
-            x: width / 2,
-            y: height / 2,
-        };
-        clear_area(&mut grid, width, height, base, 2);
-
-        place_resources(&mut grid, width, height, ResourceKind::Energy, 10);
-        place_resources(&mut grid, width, height, ResourceKind::Crystal, 10);
-
-        Map {
-            width,
-            height,
-            grid,
-        }
+        let mut map = Map { width, height, cells };
+        map.scatter_resources(seed);
+        map
     }
 
-    pub fn in_bounds(&self, pos: Pos) -> bool {
-        pos.x < self.width && pos.y < self.height
+    fn scatter_resources(&mut self, seed: u32) {
+        use rand::{Rng, SeedableRng, rngs::StdRng, seq::IteratorRandom};
+
+        let mut rng = StdRng::seed_from_u64(u64::from(seed) ^ 0x5EED);
+        for kind in [ResourceKind::Energy, ResourceKind::Crystal] {
+            let empty_indices = self
+                .cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| **c == Cell::Empty)
+                .map(|(i, _)| i)
+                .choose_multiple(&mut rng, RESOURCES_PER_KIND);
+            for idx in empty_indices {
+                let qty = rng.random_range(50..=200);
+                self.cells[idx] = Cell::Resource(kind, qty);
+            }
+        }
     }
 
     pub fn get(&self, pos: Pos) -> Option<Cell> {
-        if self.in_bounds(pos) {
-            Some(self.grid[pos.y][pos.x])
-        } else {
-            None
+        if pos.x < 0 || pos.y < 0 || pos.x >= self.width || pos.y >= self.height {
+            return None;
         }
+        Some(self.cells[(pos.y * self.width + pos.x) as usize])
     }
 
     pub fn set(&mut self, pos: Pos, cell: Cell) {
-        if self.in_bounds(pos) {
-            self.grid[pos.y][pos.x] = cell;
+        if pos.x >= 0 && pos.y >= 0 && pos.x < self.width && pos.y < self.height {
+            self.cells[(pos.y * self.width + pos.x) as usize] = cell;
         }
     }
 
-    pub fn is_walkable_pos(&self, pos: Pos) -> bool {
-        self.get(pos).is_some_and(|cell| cell != Cell::Obstacle)
+    pub fn base_pos(&self) -> Pos {
+        Self::base_pos_for(self.width, self.height)
     }
 
-    pub fn neighbors(&self, pos: Pos) -> impl Iterator<Item = Pos> + '_ {
-        const DIRS: [(isize, isize); 4] = [(0, 1), (1, 0), (0, -1), (-1, 0)];
-
-        DIRS.into_iter().filter_map(move |(dx, dy)| {
-            let x = pos.x.checked_add_signed(dx)?;
-            let y = pos.y.checked_add_signed(dy)?;
-            let next = Pos { x, y };
-            self.is_walkable_pos(next).then_some(next)
-        })
-    }
-
-    pub fn take_resource(&mut self, pos: Pos, capacity: u32) -> Option<(ResourceKind, u32)> {
-        let cell = self.get(pos)?;
-        let kind = cell.resource_kind()?;
-        let amount = cell.resource_amount().min(capacity);
-        let remaining = cell.resource_amount() - amount;
-
-        let new_cell = match (kind, remaining) {
-            (_, 0) => Cell::Empty,
-            (ResourceKind::Energy, amount) => Cell::Energy(amount),
-            (ResourceKind::Crystal, amount) => Cell::Crystal(amount),
-        };
-        self.set(pos, new_cell);
-
-        Some((kind, amount))
+    fn base_pos_for(width: i32, height: i32) -> Pos {
+        Pos { x: width / 2, y: height / 2 }
     }
 }
 
-fn clear_area(grid: &mut [Vec<Cell>], width: usize, height: usize, center: Pos, radius: usize) {
-    let min_x = center.x.saturating_sub(radius);
-    let max_x = (center.x + radius).min(width.saturating_sub(1));
-    let min_y = center.y.saturating_sub(radius);
-    let max_y = (center.y + radius).min(height.saturating_sub(1));
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    for row in grid.iter_mut().take(max_y + 1).skip(min_y) {
-        for cell in row.iter_mut().take(max_x + 1).skip(min_x) {
-            *cell = Cell::Empty;
+    #[test]
+    fn generate_places_base_obstacles_and_resources() {
+        let map = Map::generate(60, 30, 42);
+        assert_eq!(map.get(Map::base_pos_for(map.width, map.height)), Some(Cell::Base));
+
+        let mut obstacles = 0usize;
+        let mut energy = 0usize;
+        let mut crystal = 0usize;
+        for y in 0..map.height {
+            for x in 0..map.width {
+                match map.get(Pos { x, y }).unwrap() {
+                    Cell::Obstacle => obstacles += 1,
+                    Cell::Resource(ResourceKind::Energy, qty) => {
+                        assert!((50..=200).contains(&qty));
+                        energy += 1;
+                    }
+                    Cell::Resource(ResourceKind::Crystal, qty) => {
+                        assert!((50..=200).contains(&qty));
+                        crystal += 1;
+                    }
+                    _ => {}
+                }
+            }
         }
-    }
-}
-
-fn place_resources(
-    grid: &mut [Vec<Cell>],
-    width: usize,
-    height: usize,
-    kind: ResourceKind,
-    count: usize,
-) {
-    for _ in 0..count {
-        let x = (rand::random::<u32>() as usize) % width;
-        let y = (rand::random::<u32>() as usize) % height;
-
-        if grid[y][x] == Cell::Empty {
-            let amount = 50 + (rand::random::<u32>() % 150);
-            grid[y][x] = match kind {
-                ResourceKind::Energy => Cell::Energy(amount),
-                ResourceKind::Crystal => Cell::Crystal(amount),
-            };
-        }
+        assert!(obstacles > 0, "expected some obstacles from perlin noise");
+        assert_eq!(energy, RESOURCES_PER_KIND);
+        assert_eq!(crystal, RESOURCES_PER_KIND);
     }
 }

@@ -4,58 +4,55 @@ mod robot;
 mod ui;
 mod world;
 
-use ratatui::crossterm::{
-    event::{self, Event, KeyCode},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-use std::io;
+use map::Map;
+use robot::RobotMessage;
+use std::sync::Arc;
 use std::time::Duration;
-use world::World;
+use tokio::sync::RwLock;
+use world::SharedWorld;
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+async fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    // random seed
+    let seed : u32 = rand::random();
+    // get viewport width and height
+    let viewport_width : i32 = crossterm::terminal::size().unwrap().0 as i32;
+    let viewport_height : i32 = crossterm::terminal::size().unwrap().1 as i32;
+    let world = Arc::new(RwLock::new(SharedWorld::new(Map::generate(viewport_width, viewport_height, seed))));
 
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
+    let (tx, rx) = tokio::sync::mpsc::channel::<RobotMessage>(100);
+    tokio::spawn(base::run(world.clone(), rx));
 
-    let result = run_app(&mut terminal).await;
+    // TODO (step 5 — remove before Phase 2 merge): temporary single scout for local testing.
+    {
+        let base_pos = world.read().await.map.base_pos();
+        let scout = robot::Robot::new_scout(0, base_pos, tx.clone());
+        {
+            let mut w = world.write().await;
+            w.robot_positions.insert(scout.id, scout.pos);
+            w.robot_kinds.insert(scout.id, robot::RobotKind::Scout);
+        }
+        tokio::spawn(robot::run_scout(scout, world.clone()));
+    }
 
-    // Cleanup
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
+    let mut terminal = ratatui::init();
+    let result = run(&mut terminal, world).await;
+    ratatui::restore();
     result
 }
 
-async fn run_app(
-    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stdout>>,
-) -> io::Result<()> {
-    let mut world = World::new(100, 30);
-    let mut should_quit = false;
-
-    while !should_quit {
-        // Render
-        terminal.draw(|f| ui::render_ui(f, &world))?;
-
-        // Update
-        world.update();
-
-        // Handle input
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
-                    should_quit = true;
-                }
-            }
+async fn run(
+    terminal: &mut ratatui::DefaultTerminal,
+    world: Arc<RwLock<SharedWorld>>,
+) -> color_eyre::Result<()> {
+    loop {
+        {
+            let world = world.read().await;
+            terminal.draw(|frame| ui::render(frame, &world))?;
         }
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        if crossterm::event::poll(Duration::from_millis(100))? && crossterm::event::read()?.is_key_press() {
+            return Ok(());
+        }
     }
-
-    Ok(())
 }
