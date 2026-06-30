@@ -136,51 +136,27 @@ impl Robot {
 }
 
 impl Robot {
-    pub fn step_collector(&mut self, world: &mut SharedWorld) {
+    pub fn step_collector(&mut self, world: &mut SharedWorld) -> Vec<RobotMessage> {
         if self.kind != RobotKind::Collector {
-            return;
+            return Vec::new();
         }
 
-        if self.carrying.is_some() {
-            let base_pos = world.map.base_pos();
-            if self.pos == base_pos {
-                self.carrying = None;
-                return;
-            }
-
-            if let Some(next) = next_step_toward(self.pos, base_pos, world) {
-                self.pos = next;
-            }
-
-            if self.pos == base_pos {
-                self.carrying = None;
-            }
-            return;
-        }
-
-        let Some(resource_pos) = nearest_known_resource(self.pos, world) else {
-            return;
-        };
-
-        if !is_adjacent_or_same(self.pos, resource_pos) {
-            if let Some(next) = next_step_toward(self.pos, resource_pos, world) {
-                self.pos = next;
-            }
-        }
-
-        if is_adjacent_or_same(self.pos, resource_pos) {
-            self.collect_one_unit(resource_pos, world);
-        }
+        let action = plan_collector_step(self, world);
+        apply_collector_action(self, world, action)
     }
 
-    fn collect_one_unit(&mut self, resource_pos: Pos, world: &mut SharedWorld) {
+    fn collect_one_unit(
+        &mut self,
+        resource_pos: Pos,
+        world: &mut SharedWorld,
+    ) -> Option<RobotMessage> {
         let Some(Cell::Resource(kind, amount)) = world.map.get(resource_pos) else {
             world.known_cells.remove(&resource_pos);
-            return;
+            return None;
         };
         if amount == 0 {
             world.known_cells.remove(&resource_pos);
-            return;
+            return None;
         }
 
         let updated_cell = if amount == 1 {
@@ -192,15 +168,87 @@ impl Robot {
         world.known_cells.insert(resource_pos, updated_cell);
 
         self.carrying = Some(kind);
-        let _ = self
-            .tx
-            .try_send(RobotMessage::Collected { kind, amount: 1 });
+        Some(RobotMessage::Collected { kind, amount: 1 })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollectorAction {
+    Idle,
+    Move(Pos),
+    MoveAndCollect { next: Pos, resource_pos: Pos },
+    Collect(Pos),
+    Unload,
+}
+
+fn plan_collector_step(robot: &Robot, world: &SharedWorld) -> CollectorAction {
+    if robot.kind != RobotKind::Collector {
+        return CollectorAction::Idle;
+    }
+
+    if robot.carrying.is_some() {
+        let base_pos = world.map.base_pos();
+        if robot.pos == base_pos {
+            return CollectorAction::Unload;
+        }
+
+        return next_step_toward(robot.pos, base_pos, world)
+            .map(CollectorAction::Move)
+            .unwrap_or(CollectorAction::Idle);
+    }
+
+    let Some((resource_pos, next_step)) = nearest_known_resource_step(robot.pos, world) else {
+        return CollectorAction::Idle;
+    };
+
+    if is_adjacent_or_same(robot.pos, resource_pos) {
+        CollectorAction::Collect(resource_pos)
+    } else if is_adjacent_or_same(next_step, resource_pos) {
+        CollectorAction::MoveAndCollect {
+            next: next_step,
+            resource_pos,
+        }
+    } else {
+        CollectorAction::Move(next_step)
+    }
+}
+
+fn apply_collector_action(
+    robot: &mut Robot,
+    world: &mut SharedWorld,
+    action: CollectorAction,
+) -> Vec<RobotMessage> {
+    match action {
+        CollectorAction::Idle => Vec::new(),
+        CollectorAction::Move(next) => {
+            robot.pos = next;
+            Vec::new()
+        }
+        CollectorAction::MoveAndCollect { next, resource_pos } => {
+            robot.pos = next;
+            robot
+                .collect_one_unit(resource_pos, world)
+                .into_iter()
+                .collect()
+        }
+        CollectorAction::Collect(resource_pos) => robot
+            .collect_one_unit(resource_pos, world)
+            .into_iter()
+            .collect(),
+        CollectorAction::Unload => {
+            robot.carrying = None;
+            Vec::new()
+        }
     }
 }
 
 fn next_step_toward(from: Pos, to: Pos, world: &SharedWorld) -> Option<Pos> {
+    path_to(from, to, world).map(|(_, next)| next)
+}
+
+fn path_to(from: Pos, to: Pos, world: &SharedWorld) -> Option<(usize, Pos)> {
     if from == to {
-        return Some(from);
+        return Some((0, from));
     }
 
     let mut frontier = VecDeque::from([from]);
@@ -213,7 +261,7 @@ fn next_step_toward(from: Pos, to: Pos, world: &SharedWorld) -> Option<Pos> {
         }
 
         for next in cardinal_neighbors(current) {
-            if visited.contains(&next) || !is_known_walkable(next, world) {
+            if visited.contains(&next) || !is_known_walkable(next, to, world) {
                 continue;
             }
 
@@ -227,10 +275,12 @@ fn next_step_toward(from: Pos, to: Pos, world: &SharedWorld) -> Option<Pos> {
         return None;
     }
 
+    let mut distance = 0;
     let mut current = to;
     while let Some(previous) = came_from.get(&current).copied() {
+        distance += 1;
         if previous == from {
-            return Some(current);
+            return Some((distance, current));
         }
         current = previous;
     }
@@ -238,7 +288,7 @@ fn next_step_toward(from: Pos, to: Pos, world: &SharedWorld) -> Option<Pos> {
     None
 }
 
-fn nearest_known_resource(from: Pos, world: &SharedWorld) -> Option<Pos> {
+fn nearest_known_resource_step(from: Pos, world: &SharedWorld) -> Option<(Pos, Pos)> {
     world
         .known_cells
         .iter()
@@ -246,8 +296,9 @@ fn nearest_known_resource(from: Pos, world: &SharedWorld) -> Option<Pos> {
             Cell::Resource(_, amount) if *amount > 0 => Some(*pos),
             _ => None,
         })
-        .filter(|pos| *pos == from || next_step_toward(from, *pos, world).is_some())
-        .min_by_key(|pos| manhattan_distance(from, *pos))
+        .filter_map(|pos| path_to(from, pos, world).map(|(distance, next)| (pos, next, distance)))
+        .min_by_key(|(_, _, distance)| *distance)
+        .map(|(pos, next, _)| (pos, next))
 }
 
 fn cardinal_neighbors(pos: Pos) -> impl Iterator<Item = Pos> {
@@ -257,12 +308,22 @@ fn cardinal_neighbors(pos: Pos) -> impl Iterator<Item = Pos> {
     })
 }
 
-fn is_known_walkable(pos: Pos, world: &SharedWorld) -> bool {
+fn is_known_walkable(pos: Pos, goal: Pos, world: &SharedWorld) -> bool {
     if world.map.get(pos).is_none() {
         return false;
     }
 
-    !matches!(world.known_cells.get(&pos), Some(Cell::Obstacle))
+    if pos == goal {
+        return matches!(
+            world.known_cells.get(&pos),
+            Some(Cell::Empty | Cell::Resource(_, _) | Cell::Base)
+        ) || matches!(world.map.get(pos), Some(Cell::Base));
+    }
+
+    matches!(
+        world.known_cells.get(&pos),
+        Some(Cell::Empty | Cell::Resource(_, _) | Cell::Base)
+    )
 }
 
 fn is_adjacent_or_same(a: Pos, b: Pos) -> bool {
@@ -311,10 +372,20 @@ pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
 /// Async task that drives a single collector for the lifetime of the simulation.
 pub async fn run_collector(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
     loop {
-        {
+        let action = {
+            let world_guard = world.read().await;
+            plan_collector_step(&robot, &world_guard)
+        };
+
+        let messages = {
             let mut world_guard = world.write().await;
-            robot.step_collector(&mut world_guard);
+            let messages = apply_collector_action(&mut robot, &mut world_guard, action);
             world_guard.robot_positions.insert(robot.id, robot.pos);
+            messages
+        };
+
+        for msg in messages {
+            let _ = robot.tx.send(msg).await;
         }
 
         tokio::time::sleep(Duration::from_millis(200)).await;
