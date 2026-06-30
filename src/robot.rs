@@ -1,5 +1,6 @@
 use crate::map::{Cell, Pos, ResourceKind};
 use std::collections::HashSet;
+use tokio::sync::mpsc::Sender;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RobotKind {
@@ -13,10 +14,13 @@ pub enum RobotMessage {
     Collected { kind: ResourceKind, amount: u32 },
 }
 
-// ponytail: movement/exploration logic not implemented yet (Robot Behaviors phase) — struct shape only.
 pub struct Robot {
     pub id: usize,
     pub kind: RobotKind,
     pub pos: Pos,
     pub known_cells: HashSet<Pos>,
+    /// Channel to send discoveries and collection events to the base.
+    pub tx: Sender<RobotMessage>,
+    /// Resource the collector is currently carrying (None for scouts or idle collectors).
+    pub carrying: Option<ResourceKind>,
 }
