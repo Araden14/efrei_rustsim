@@ -15,7 +15,7 @@ fn cell_glyph(cell: Cell) -> (char, Color) {
     match cell {
         Cell::Empty => (' ', Color::Reset),
         Cell::Obstacle => ('O', Color::LightCyan),
-        Cell::Resource(crate::map::ResourceKind::Energy, _) => ('E', Color::Green),
+        Cell::Resource(crate::map::ResourceKind::Energy, _) => ('E', Color::Yellow),
         Cell::Resource(crate::map::ResourceKind::Crystal, _) => ('C', Color::LightMagenta),
         Cell::Base => ('#', Color::LightGreen),
     }
