@@ -3,8 +3,6 @@ use crate::world::SharedWorld;
 use std::sync::Arc;
 use tokio::sync::{mpsc::Receiver, RwLock};
 
-// ponytail: only wires the channel through to SharedWorld for now — aggregation
-// rules (Communication System phase) land once robots actually send messages.
 pub async fn run(world: Arc<RwLock<SharedWorld>>, mut rx: Receiver<RobotMessage>) {
     while let Some(msg) = rx.recv().await {
         let mut world = world.write().await;

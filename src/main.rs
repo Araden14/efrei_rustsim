@@ -14,8 +14,12 @@ use world::SharedWorld;
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-
-    let world = Arc::new(RwLock::new(SharedWorld::new(Map::empty(60, 30))));
+    // random seed
+    let seed : u32 = rand::random();
+    // get viewport width and height
+    let viewport_width : i32 = crossterm::terminal::size().unwrap().0 as i32;
+    let viewport_height : i32 = crossterm::terminal::size().unwrap().1 as i32;
+    let world = Arc::new(RwLock::new(SharedWorld::new(Map::generate(viewport_width, viewport_height, seed))));
 
     let (tx, rx) = tokio::sync::mpsc::channel::<RobotMessage>(100);
     let _tx = tx; // ponytail: kept alive so the base task doesn't exit; no robots send on it yet.
