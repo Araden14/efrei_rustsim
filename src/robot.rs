@@ -2,6 +2,21 @@ use crate::map::{Cell, Pos, ResourceKind};
 use std::collections::HashSet;
 use tokio::sync::mpsc::Sender;
 
+// Cardinal directions for movement: N, S, W, E
+const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
+
+// Moore neighborhood (8 surrounding cells) for discovery scanning
+const NEIGHBORS: [(i32, i32); 8] = [
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RobotKind {
     Scout,
@@ -23,4 +38,17 @@ pub struct Robot {
     pub tx: Sender<RobotMessage>,
     /// Resource the collector is currently carrying (None for scouts or idle collectors).
     pub carrying: Option<ResourceKind>,
+}
+
+impl Robot {
+    pub fn new_scout(id: usize, pos: Pos, tx: Sender<RobotMessage>) -> Self {
+        Robot {
+            id,
+            kind: RobotKind::Scout,
+            pos,
+            known_cells: HashSet::new(),
+            tx,
+            carrying: None, // scouts never carry resources
+        }
+    }
 }
