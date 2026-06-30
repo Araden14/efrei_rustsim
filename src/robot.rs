@@ -1,4 +1,6 @@
 use crate::map::{Cell, Pos, ResourceKind};
+use crate::world::SharedWorld;
+use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use tokio::sync::mpsc::Sender;
 
@@ -50,5 +52,71 @@ impl Robot {
             tx,
             carrying: None, // scouts never carry resources
         }
+    }
+
+    /**
+     * Moves the scout one step in a random walkable direction, then scans the 8 surrounding cells for new discoveries.
+     * Returns `(moved, messages)` where `moved` is `false` when all four cardinal
+     * directions are blocked. The caller owns the decision of what to do when stuck.
+     */
+    pub fn step_scout(&mut self, world: &SharedWorld) -> (bool, Vec<RobotMessage>) {
+        let moved = self.move_randomly(world);
+        let messages = self.scan_neighbors(world);
+        (moved, messages)
+    }
+
+    /**
+     * Picks a random walkable cardinal direction and moves one step.
+     * Returns `true` if the scout moved, `false` if all directions were blocked.
+     */
+    fn move_randomly(&mut self, world: &SharedWorld) -> bool {
+        let mut dirs: Vec<(i32, i32)> = DIRECTIONS.to_vec();
+        dirs.shuffle(&mut rand::rng());
+
+        for (dx, dy) in dirs {
+            let candidate = Pos {
+                x: self.pos.x + dx,
+                y: self.pos.y + dy,
+            };
+            match world.map.get(candidate) {
+                Some(Cell::Obstacle) | None => continue,
+                Some(_) => {
+                    self.pos = candidate;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /**
+     * Scans the 8 surrounding cells.
+     * For each position not yet in 'known_cells', records it locally and returns a 'Discovered' message for the base.
+     * Out-of-bounds neighbors are silently skipped and never marked as known.
+     */
+    fn scan_neighbors(&mut self, world: &SharedWorld) -> Vec<RobotMessage> {
+        let mut messages = Vec::new();
+
+        for (dx, dy) in NEIGHBORS {
+            let neighbor = Pos {
+                x: self.pos.x + dx,
+                y: self.pos.y + dy,
+            };
+
+            if self.known_cells.contains(&neighbor) {
+                continue;
+            }
+
+            if let Some(cell) = world.map.get(neighbor) {
+                self.known_cells.insert(neighbor);
+                messages.push(RobotMessage::Discovered {
+                    pos: neighbor,
+                    cell,
+                });
+            }
+            // None means out of bounds -> skip silently, don't mark as known.
+        }
+
+        messages
     }
 }
