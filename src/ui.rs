@@ -69,9 +69,27 @@ pub fn render(frame: &mut Frame, world: &SharedWorld) {
         map_area,
     );
 
+    // Count resources still on the map (not yet collected).
+    let mut energy_remaining: u32 = 0;
+    let mut crystal_remaining: u32 = 0;
+    for y in 0..map.height {
+        for x in 0..map.width {
+            if let Some(Cell::Resource(kind, amount)) = map.get(Pos { x, y }) {
+                match kind {
+                    crate::map::ResourceKind::Energy => energy_remaining += amount,
+                    crate::map::ResourceKind::Crystal => crystal_remaining += amount,
+                }
+            }
+        }
+    }
+
     let status = format!(
-        "energy: {}  crystal: {}  (any key to quit)",
-        world.energy_collected, world.crystal_collected
+        "robots: {}  |  collected  E: {}  C: {}  |  remaining  E: {}  C: {}  |  (any key to quit)",
+        world.robot_positions.len(),
+        world.energy_collected,
+        world.crystal_collected,
+        energy_remaining,
+        crystal_remaining,
     );
     frame.render_widget(Paragraph::new(status), status_area);
 }
