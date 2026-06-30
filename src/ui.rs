@@ -1,4 +1,5 @@
 use crate::map::{Cell, Pos};
+use crate::robot::RobotKind;
 use crate::world::SharedWorld;
 use ratatui::{
     Frame,
@@ -29,9 +30,14 @@ pub fn render(frame: &mut Frame, world: &SharedWorld) {
             let spans: Vec<Span> = (0..map.width)
                 .map(|x| {
                     let pos = Pos { x, y };
-                    let (glyph, color) = if world.scout_positions.contains(&pos) {
+                    let robot_here = |kind| {
+                        world.robot_positions.iter().any(|(id, p)| {
+                            *p == pos && world.robot_kinds.get(id) == Some(&kind)
+                        })
+                    };
+                    let (glyph, color) = if robot_here(RobotKind::Scout) {
                         ('x', Color::White)
-                    } else if world.collector_positions.contains(&pos) {
+                    } else if robot_here(RobotKind::Collector) {
                         ('o', Color::LightBlue)
                     } else {
                         cell_glyph(map.get(pos).unwrap_or(Cell::Empty))
