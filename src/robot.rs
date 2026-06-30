@@ -2,7 +2,10 @@ use crate::map::{Cell, Pos, ResourceKind};
 use crate::world::SharedWorld;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::RwLock;
 
 // Cardinal directions for movement: N, S, W, E
 const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
@@ -118,5 +121,40 @@ impl Robot {
         }
 
         messages
+    }
+}
+
+/// Async task that drives a single scout for the lifetime of the simulation.
+///
+///   1. Read lock  → step_scout (movement + discovery)
+///   2. Write lock → update robot_positions
+///   3. No lock    → forward discovery messages to base via channel
+///   4. Sleep 200ms, or break if permanently stuck (obstacles are immovable)
+pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
+    loop {
+        // Compute movement + discoveries (read lock released before any await)
+        let (moved, messages) = {
+            let world_guard = world.read().await;
+            robot.step_scout(&world_guard)
+        };
+
+        // Publish the new position (write lock released immediately after)
+        {
+            let mut world_guard = world.write().await;
+            world_guard.robot_positions.insert(robot.id, robot.pos);
+        }
+
+        // Forward discoveries to the base — no lock held
+        for msg in messages {
+            let _ = robot.tx.send(msg).await;
+        }
+
+        // Do not force movement if scout is stuck
+        if moved {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        } else {
+            // Obstacles are permanent — stuck once means stuck forever. Stop the task.
+            break;
+        }
     }
 }
