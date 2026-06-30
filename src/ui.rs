@@ -1,4 +1,5 @@
-use crate::map::Cell;
+use crate::map::{Cell, Pos};
+use crate::robot::RobotKind;
 use crate::world::SharedWorld;
 use ratatui::{
     Frame,
@@ -7,7 +8,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
+use std::collections::HashMap;
 
+/// Returns the character and color used to draw a given map cell.
 fn cell_glyph(cell: Cell) -> (char, Color) {
     match cell {
         Cell::Empty => (' ', Color::Reset),
@@ -18,17 +21,41 @@ fn cell_glyph(cell: Cell) -> (char, Color) {
     }
 }
 
+/// Returns the character and color used to draw a robot of a given kind.
+fn robot_glyph(kind: RobotKind) -> (char, Color) {
+    match kind {
+        RobotKind::Scout => ('x', Color::Red),
+        RobotKind::Collector => ('o', Color::Magenta),
+    }
+}
+
 pub fn render(frame: &mut Frame, world: &SharedWorld) {
     let [map_area, status_area] =
         Layout::new(Direction::Vertical, [Constraint::Min(0), Constraint::Length(1)])
             .areas(frame.area());
 
     let map = &world.map;
+
+    // Build a Pos -> RobotKind lookup so we can overlay robots on top of cells
+    // without scanning the whole robot list for each cell.
+    let mut robot_at: HashMap<Pos, RobotKind> = HashMap::new();
+    for (id, pos) in &world.robot_positions {
+        if let Some(kind) = world.robot_kinds.get(id) {
+            robot_at.insert(*pos, *kind);
+        }
+    }
+
     let lines: Vec<Line> = (0..map.height)
         .map(|y| {
             let spans: Vec<Span> = (0..map.width)
                 .map(|x| {
-                    let cell = map.get(crate::map::Pos { x, y }).unwrap_or(Cell::Empty);
+                    let pos = Pos { x, y };
+                    // A robot on a cell takes visual priority over the cell itself.
+                    if let Some(kind) = robot_at.get(&pos) {
+                        let (glyph, color) = robot_glyph(*kind);
+                        return Span::styled(glyph.to_string(), Style::default().fg(color));
+                    }
+                    let cell = map.get(pos).unwrap_or(Cell::Empty);
                     let (glyph, color) = cell_glyph(cell);
                     Span::styled(glyph.to_string(), Style::default().fg(color))
                 })
@@ -37,7 +64,10 @@ pub fn render(frame: &mut Frame, world: &SharedWorld) {
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines).block(Block::bordered().title("resource-sim")), map_area);
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title("resource-sim")),
+        map_area,
+    );
 
     let status = format!(
         "energy: {}  crystal: {}  (any key to quit)",
