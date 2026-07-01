@@ -4,14 +4,15 @@ mod ui;
 mod world;
 
 use map::Map;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use world::SharedWorld;
 
 // Number of scouts and collectors to spawn
-const NUM_SCOUTS: usize = 3;
-const NUM_COLLECTORS: usize = 2;
+const NUM_SCOUTS: usize = 10;
+const NUM_COLLECTORS: usize = 5;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -66,6 +67,10 @@ async fn main() -> color_eyre::Result<()> {
                 robot::RobotMessage::Discovered { pos, cell } => {
                     let mut w = world_for_base.write().await;
                     w.known_cells.insert(pos, cell);
+                    // Any newly discovered resource may unblock idle collectors.
+                    if matches!(cell, map::Cell::Resource(_, _)) {
+                        dispatch_free_collectors(&mut w);
+                    }
                 }
                 robot::RobotMessage::Collected { kind, amount } => {
                     let mut w = world_for_base.write().await;
@@ -73,6 +78,12 @@ async fn main() -> color_eyre::Result<()> {
                         map::ResourceKind::Energy => w.energy_collected += amount,
                         map::ResourceKind::Crystal => w.crystal_collected += amount,
                     }
+                }
+                robot::RobotMessage::CollectorIdle(_id) => {
+                    // The collector already removed itself from collector_targets before
+                    // sending this message, so it will appear as free here.
+                    let mut w = world_for_base.write().await;
+                    dispatch_free_collectors(&mut w);
                 }
             }
         }
@@ -97,4 +108,48 @@ async fn main() -> color_eyre::Result<()> {
     // 6. Always restore the terminal
     ratatui::restore();
     result
+}
+
+/// Assign every unassigned collector to a resource, preferring the resource
+/// with the fewest collectors already heading toward it.
+///
+/// Because assignment counts are updated inside the loop, consecutive calls for
+/// multiple free collectors naturally spread them across available resources
+/// before any single resource gets a second assignment.
+fn dispatch_free_collectors(world: &mut SharedWorld) {
+    let free_collectors: Vec<usize> = world
+        .robot_kinds
+        .iter()
+        .filter(|(_, k)| **k == robot::RobotKind::Collector)
+        .map(|(id, _)| *id)
+        .filter(|id| !world.collector_targets.contains_key(id))
+        .collect();
+
+    for collector_id in free_collectors {
+        if let Some(target) = least_loaded_resource(world) {
+            world.collector_targets.insert(collector_id, target);
+        }
+    }
+}
+
+/// Return the known resource position that currently has the fewest collectors
+/// assigned to it, or `None` if no resources are known yet.
+fn least_loaded_resource(world: &SharedWorld) -> Option<map::Pos> {
+    // Build a count map: resource_pos -> number of collectors already assigned.
+    let mut counts: HashMap<map::Pos, usize> = world
+        .known_cells
+        .iter()
+        .filter_map(|(pos, cell)| match cell {
+            map::Cell::Resource(_, amount) if *amount > 0 => Some((*pos, 0usize)),
+            _ => None,
+        })
+        .collect();
+
+    for &target in world.collector_targets.values() {
+        if let Some(c) = counts.get_mut(&target) {
+            *c += 1;
+        }
+    }
+
+    counts.into_iter().min_by_key(|(_, c)| *c).map(|(pos, _)| pos)
 }
