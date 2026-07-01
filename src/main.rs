@@ -4,39 +4,30 @@ mod ui;
 mod world;
 
 use map::Map;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use world::SharedWorld;
 
-// Number of scouts and collectors to spawn
 const NUM_SCOUTS: usize = 10;
 const NUM_COLLECTORS: usize = 5;
 
 #[tokio::main]
-async fn main() -> color_eyre::Result<()> {
-    // 1. Set up error reporting and enter the TUI
-    color_eyre::install()?;
+async fn main() -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<robot::RobotMessage>(256);
 
-    // 2. Generate the world
     let seed: u32 = rand::random();
     let (viewport_width, viewport_height) = crossterm::terminal::size()?;
     let map_width = viewport_width.saturating_sub(2) as i32;
     let map_height = viewport_height.saturating_sub(3) as i32;
     let world = Arc::new(RwLock::new(SharedWorld::new(Map::generate(
-        map_width,
-        map_height,
-        seed,
+        map_width, map_height, seed,
     ))));
 
-    // 3. Spawn scouts and collectors at base_pos
     {
         let base_pos = world.read().await.map.base_pos();
 
-        // Spawn NUM_SCOUTS scouts (ids 0..NUM_SCOUTS)
         for id in 0..NUM_SCOUTS {
             let scout = robot::Robot::new_scout(id, base_pos, tx.clone());
             {
@@ -47,19 +38,18 @@ async fn main() -> color_eyre::Result<()> {
             tokio::spawn(robot::run_scout(scout, world.clone()));
         }
 
-        // Spawn NUM_COLLECTORS collectors (ids NUM_SCOUTS..NUM_SCOUTS+NUM_COLLECTORS)
         for id in NUM_SCOUTS..(NUM_SCOUTS + NUM_COLLECTORS) {
             let collector = robot::Robot::new_collector(id, base_pos, tx.clone());
             {
                 let mut w = world.write().await;
                 w.robot_positions.insert(collector.id, collector.pos);
-                w.robot_kinds.insert(collector.id, robot::RobotKind::Collector);
+                w.robot_kinds
+                    .insert(collector.id, robot::RobotKind::Collector);
             }
             tokio::spawn(robot::run_collector(collector, world.clone()));
         }
     }
 
-    // 4. Spawn base task: reads messages from robots and updates world state
     let world_for_base = world.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -80,8 +70,6 @@ async fn main() -> color_eyre::Result<()> {
                     }
                 }
                 robot::RobotMessage::CollectorIdle(_id) => {
-                    // The collector already removed itself from collector_targets before
-                    // sending this message, so it will appear as free here.
                     let mut w = world_for_base.write().await;
                     dispatch_free_collectors(&mut w);
                 }
@@ -89,7 +77,6 @@ async fn main() -> color_eyre::Result<()> {
         }
     });
 
-    // 5. Main loop: redraw every 50ms, quit on keypress
     let result = async {
         loop {
             {
@@ -105,17 +92,10 @@ async fn main() -> color_eyre::Result<()> {
     }
     .await;
 
-    // 6. Always restore the terminal
     ratatui::restore();
     result
 }
 
-/// Assign every unassigned collector to a resource, preferring the resource
-/// with the fewest collectors already heading toward it.
-///
-/// Because assignment counts are updated inside the loop, consecutive calls for
-/// multiple free collectors naturally spread them across available resources
-/// before any single resource gets a second assignment.
 fn dispatch_free_collectors(world: &mut SharedWorld) {
     let free_collectors: Vec<usize> = world
         .robot_kinds
@@ -132,24 +112,17 @@ fn dispatch_free_collectors(world: &mut SharedWorld) {
     }
 }
 
-/// Return the known resource position that currently has the fewest collectors
-/// assigned to it, or `None` if no resources are known yet.
 fn least_loaded_resource(world: &SharedWorld) -> Option<map::Pos> {
-    // Build a count map: resource_pos -> number of collectors already assigned.
-    let mut counts: HashMap<map::Pos, usize> = world
+    world
         .known_cells
         .iter()
-        .filter_map(|(pos, cell)| match cell {
-            map::Cell::Resource(_, amount) if *amount > 0 => Some((*pos, 0usize)),
-            _ => None,
+        .filter(|(_, cell)| matches!(cell, map::Cell::Resource(_, amount) if *amount > 0))
+        .min_by_key(|(pos, _)| {
+            world
+                .collector_targets
+                .values()
+                .filter(|target| *target == pos)
+                .count()
         })
-        .collect();
-
-    for &target in world.collector_targets.values() {
-        if let Some(c) = counts.get_mut(&target) {
-            *c += 1;
-        }
-    }
-
-    counts.into_iter().min_by_key(|(_, c)| *c).map(|(pos, _)| pos)
+        .map(|(pos, _)| *pos)
 }

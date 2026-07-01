@@ -2,11 +2,11 @@ use crate::map::{Cell, Pos};
 use crate::robot::RobotKind;
 use crate::world::SharedWorld;
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
+    Frame,
 };
 use std::collections::HashMap;
 
@@ -30,9 +30,11 @@ fn robot_glyph(kind: RobotKind) -> (char, Color) {
 }
 
 pub fn render(frame: &mut Frame, world: &SharedWorld) {
-    let [map_area, status_area] =
-        Layout::new(Direction::Vertical, [Constraint::Min(0), Constraint::Length(1)])
-            .areas(frame.area());
+    let [map_area, status_area] = Layout::new(
+        Direction::Vertical,
+        [Constraint::Min(0), Constraint::Length(1)],
+    )
+    .areas(frame.area());
 
     let map = &world.map;
 

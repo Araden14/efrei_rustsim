@@ -3,18 +3,11 @@ name = "resource-sim"
 version = "0.1.0"
 description = "Resource collection simulation with autonomous robots (EFREI Rust project)"
 authors = ["Araden14 <arnaud-danselme@hotmail.com>"]
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-color-eyre = "0.6.3"
 crossterm = "0.29.0"
 ratatui = "0.30.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 rand = "0.9"
 noise = "0.9"
-
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-strip = true
