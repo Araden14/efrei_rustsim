@@ -135,42 +135,6 @@ impl Robot {
     }
 }
 
-impl Robot {
-    pub fn step_collector(&mut self, world: &mut SharedWorld) -> Vec<RobotMessage> {
-        if self.kind != RobotKind::Collector {
-            return Vec::new();
-        }
-
-        let action = plan_collector_step(self, world);
-        apply_collector_action(self, world, action)
-    }
-
-    fn collect_one_unit(
-        &mut self,
-        resource_pos: Pos,
-        world: &mut SharedWorld,
-    ) -> Option<RobotMessage> {
-        let Some(Cell::Resource(kind, amount)) = world.map.get(resource_pos) else {
-            world.known_cells.remove(&resource_pos);
-            return None;
-        };
-        if amount == 0 {
-            world.known_cells.remove(&resource_pos);
-            return None;
-        }
-
-        let updated_cell = if amount == 1 {
-            Cell::Empty
-        } else {
-            Cell::Resource(kind, amount - 1)
-        };
-        world.map.set(resource_pos, updated_cell);
-        world.known_cells.insert(resource_pos, updated_cell);
-
-        self.carrying = Some(kind);
-        Some(RobotMessage::Collected { kind, amount: 1 })
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CollectorAction {
@@ -333,6 +297,44 @@ fn is_adjacent_or_same(a: Pos, b: Pos) -> bool {
 fn manhattan_distance(a: Pos, b: Pos) -> i32 {
     (a.x - b.x).abs() + (a.y - b.y).abs()
 }
+
+impl Robot {
+    pub fn step_collector(&mut self, world: &mut SharedWorld) -> Vec<RobotMessage> {
+        if self.kind != RobotKind::Collector {
+            return Vec::new();
+        }
+
+        let action = plan_collector_step(self, world);
+        apply_collector_action(self, world, action)
+    }
+
+    fn collect_one_unit(
+        &mut self,
+        resource_pos: Pos,
+        world: &mut SharedWorld,
+    ) -> Option<RobotMessage> {
+        let Some(Cell::Resource(kind, amount)) = world.map.get(resource_pos) else {
+            world.known_cells.remove(&resource_pos);
+            return None;
+        };
+        if amount == 0 {
+            world.known_cells.remove(&resource_pos);
+            return None;
+        }
+
+        let updated_cell = if amount == 1 {
+            Cell::Empty
+        } else {
+            Cell::Resource(kind, amount - 1)
+        };
+        world.map.set(resource_pos, updated_cell);
+        world.known_cells.insert(resource_pos, updated_cell);
+
+        self.carrying = Some(kind);
+        Some(RobotMessage::Collected { kind, amount: 1 })
+    }
+}
+
 
 /// Async task that drives a single scout for the lifetime of the simulation.
 ///
