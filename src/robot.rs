@@ -207,7 +207,6 @@ fn next_step_toward(from: Pos, to: Pos, world: &SharedWorld) -> Option<Pos> {
         return None;
     }
 
-    let mut distance = 0;
     let mut current = to;
     while let Some(previous) = came_from.get(&current).copied() {
         if previous == from {

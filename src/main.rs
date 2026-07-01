@@ -84,7 +84,7 @@ async fn main() -> std::io::Result<()> {
                 terminal.draw(|frame| ui::render(frame, &world))?;
             }
             if crossterm::event::poll(Duration::from_millis(50))?
-                && crossterm::event::read()?.is_key_press()
+                && matches!(crossterm::event::read()?, crossterm::event::Event::Key(_))
             {
                 return Ok(());
             }
@@ -121,7 +121,7 @@ fn least_loaded_resource(world: &SharedWorld) -> Option<map::Pos> {
             world
                 .collector_targets
                 .values()
-                .filter(|target| *target == pos)
+                .filter(|target| **target == **pos)
                 .count()
         })
         .map(|(pos, _)| *pos)
