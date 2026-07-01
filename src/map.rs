@@ -24,12 +24,8 @@ pub struct Map {
     cells: Vec<Cell>,
 }
 
-const RESOURCES_PER_KIND: usize = 10;
-const OBSTACLE_THRESHOLD: f64 = 0.25;
-const NOISE_SCALE: f64 = 0.12;
-
 impl Map {
-    pub fn generate(width: i32, height: i32, seed: u32) -> Self {
+    pub fn generate(width: i32, height: i32, seed: u32, cfg: &crate::config::MapConfig) -> Self {
         use noise::{NoiseFn, Perlin};
 
         let base = Self::base_pos_for(width, height);
@@ -37,8 +33,12 @@ impl Map {
         let mut cells: Vec<Cell> = (0..height)
             .flat_map(|y| {
                 (0..width).map(move |x| {
-                    let n = perlin.get([x as f64 * NOISE_SCALE, y as f64 * NOISE_SCALE]);
-                    if n > OBSTACLE_THRESHOLD { Cell::Obstacle } else { Cell::Empty }
+                    let n = perlin.get([x as f64 * cfg.noise_scale, y as f64 * cfg.noise_scale]);
+                    if n > cfg.obstacle_threshold {
+                        Cell::Obstacle
+                    } else {
+                        Cell::Empty
+                    }
                 })
             })
             .collect();
@@ -46,7 +46,10 @@ impl Map {
         // keep the base and the tile ring around it walkable
         for dy in -1..=1 {
             for dx in -1..=1 {
-                let p = Pos { x: base.x + dx, y: base.y + dy };
+                let p = Pos {
+                    x: base.x + dx,
+                    y: base.y + dy,
+                };
                 if p.x >= 0 && p.y >= 0 && p.x < width && p.y < height {
                     cells[(p.y * width + p.x) as usize] = Cell::Empty;
                 }
@@ -54,13 +57,17 @@ impl Map {
         }
         cells[(base.y * width + base.x) as usize] = Cell::Base;
 
-        let mut map = Map { width, height, cells };
-        map.scatter_resources(seed);
+        let mut map = Map {
+            width,
+            height,
+            cells,
+        };
+        map.scatter_resources(seed, cfg);
         map
     }
 
-    fn scatter_resources(&mut self, seed: u32) {
-        use rand::{Rng, SeedableRng, rngs::StdRng, seq::IteratorRandom};
+    fn scatter_resources(&mut self, seed: u32, cfg: &crate::config::MapConfig) {
+        use rand::{rngs::StdRng, seq::IteratorRandom, Rng, SeedableRng};
 
         let mut rng = StdRng::seed_from_u64(u64::from(seed) ^ 0x5EED);
         for kind in [ResourceKind::Energy, ResourceKind::Crystal] {
@@ -70,9 +77,9 @@ impl Map {
                 .enumerate()
                 .filter(|(_, c)| **c == Cell::Empty)
                 .map(|(i, _)| i)
-                .choose_multiple(&mut rng, RESOURCES_PER_KIND);
+                .choose_multiple(&mut rng, cfg.resources_per_kind);
             for idx in empty_indices {
-                let qty = rng.random_range(10..=20);
+                let qty = rng.random_range(cfg.resource_qty_min..=cfg.resource_qty_max);
                 self.cells[idx] = Cell::Resource(kind, qty);
             }
         }
@@ -96,18 +103,26 @@ impl Map {
     }
 
     fn base_pos_for(width: i32, height: i32) -> Pos {
-        Pos { x: width / 2, y: height / 2 }
+        Pos {
+            x: width / 2,
+            y: height / 2,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MapConfig;
 
     #[test]
     fn generate_places_base_obstacles_and_resources() {
-        let map = Map::generate(60, 30, 42);
-        assert_eq!(map.get(Map::base_pos_for(map.width, map.height)), Some(Cell::Base));
+        let cfg = MapConfig::default();
+        let map = Map::generate(60, 30, 42, &cfg);
+        assert_eq!(
+            map.get(Map::base_pos_for(map.width, map.height)),
+            Some(Cell::Base)
+        );
 
         let mut obstacles = 0usize;
         let mut energy = 0usize;
@@ -117,11 +132,17 @@ mod tests {
                 match map.get(Pos { x, y }).unwrap() {
                     Cell::Obstacle => obstacles += 1,
                     Cell::Resource(ResourceKind::Energy, qty) => {
-                        assert!((50..=200).contains(&qty));
+                        assert!(
+                            (cfg.resource_qty_min..=cfg.resource_qty_max).contains(&qty),
+                            "energy qty {qty} out of range"
+                        );
                         energy += 1;
                     }
                     Cell::Resource(ResourceKind::Crystal, qty) => {
-                        assert!((50..=200).contains(&qty));
+                        assert!(
+                            (cfg.resource_qty_min..=cfg.resource_qty_max).contains(&qty),
+                            "crystal qty {qty} out of range"
+                        );
                         crystal += 1;
                     }
                     _ => {}
@@ -129,7 +150,7 @@ mod tests {
             }
         }
         assert!(obstacles > 0, "expected some obstacles from perlin noise");
-        assert_eq!(energy, RESOURCES_PER_KIND);
-        assert_eq!(crystal, RESOURCES_PER_KIND);
+        assert_eq!(energy, cfg.resources_per_kind);
+        assert_eq!(crystal, cfg.resources_per_kind);
     }
 }

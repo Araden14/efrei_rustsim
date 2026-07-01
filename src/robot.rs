@@ -341,8 +341,8 @@ fn manhattan_distance(a: Pos, b: Pos) -> i32 {
 ///   1. Read lock  → step_scout (movement + discovery)
 ///   2. Write lock → update robot_positions
 ///   3. No lock    → forward discovery messages to base via channel
-///   4. Sleep 200ms, or break if permanently stuck (obstacles are immovable)
-pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
+///   4. Sleep `tick`, or break if permanently stuck (obstacles are immovable)
+pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>, tick: Duration) {
     loop {
         // Compute movement + discoveries (read lock released before any await)
         let (moved, messages) = {
@@ -363,7 +363,7 @@ pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
 
         // Do not force movement if scout is stuck
         if moved {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(tick).await;
         } else {
             // Obstacles are permanent — stuck once means stuck forever. Stop the task.
             break;
@@ -372,7 +372,7 @@ pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
 }
 
 /// Async task that drives a single collector for the lifetime of the simulation.
-pub async fn run_collector(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
+pub async fn run_collector(mut robot: Robot, world: Arc<RwLock<SharedWorld>>, tick: Duration) {
     loop {
         let action = {
             let world_guard = world.read().await;
@@ -390,6 +390,6 @@ pub async fn run_collector(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
             let _ = robot.tx.send(msg).await;
         }
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(tick).await;
     }
 }

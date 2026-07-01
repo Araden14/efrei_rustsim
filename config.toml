@@ -1,0 +1,30 @@
+# resource-sim configuration
+# All fields are optional — remove any line to use the built-in default.
+
+[simulation]
+# Number of scout robots spawned at startup.
+num_scouts = 10
+# Number of collector robots spawned at startup.
+num_collectors = 5
+# UI redraw / event-poll interval in milliseconds (lower = smoother but more CPU).
+ui_poll_ms = 50
+
+[robots]
+# How often each scout moves and scans, in milliseconds.
+scout_tick_ms = 200
+# How often each collector acts, in milliseconds.
+collector_tick_ms = 200
+
+[map]
+# Number of deposits placed per resource type (Energy and Crystal each).
+resources_per_kind = 10
+# Perlin-noise cutoff for obstacles (0.0–1.0).
+# Higher values = fewer obstacles; lower values = denser terrain.
+obstacle_threshold = 0.25
+# Noise sampling frequency.
+# Lower = larger, smoother obstacle blobs; higher = more fragmented terrain.
+noise_scale = 0.12
+# Minimum units in a resource deposit.
+resource_qty_min = 50
+# Maximum units in a resource deposit.
+resource_qty_max = 200

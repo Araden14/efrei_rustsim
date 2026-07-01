@@ -1,3 +1,4 @@
+mod config;
 mod map;
 mod robot;
 mod ui;
@@ -10,18 +11,17 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use world::SharedWorld;
 
-// Number of scouts and collectors to spawn
-const NUM_SCOUTS: usize = 10;
-const NUM_COLLECTORS: usize = 5;
-
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    // 1. Set up error reporting and enter the TUI
+    // 1. Load configuration (config.toml if present, otherwise built-in defaults)
+    let cfg = config::Config::load()?;
+
+    // 2. Set up error reporting and enter the TUI
     color_eyre::install()?;
     let mut terminal = ratatui::init();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<robot::RobotMessage>(256);
 
-    // 2. Generate the world
+    // 3. Generate the world
     let seed: u32 = rand::random();
     let (viewport_width, viewport_height) = crossterm::terminal::size()?;
     let map_width = viewport_width.saturating_sub(2) as i32;
@@ -30,36 +30,41 @@ async fn main() -> color_eyre::Result<()> {
         map_width,
         map_height,
         seed,
+        &cfg.map,
     ))));
 
-    // 3. Spawn scouts and collectors at base_pos
+    // 4. Spawn scouts and collectors at base_pos
     {
         let base_pos = world.read().await.map.base_pos();
+        let scout_tick = Duration::from_millis(cfg.robots.scout_tick_ms);
+        let collector_tick = Duration::from_millis(cfg.robots.collector_tick_ms);
 
-        // Spawn NUM_SCOUTS scouts (ids 0..NUM_SCOUTS)
-        for id in 0..NUM_SCOUTS {
+        // Spawn scouts (ids 0..num_scouts)
+        for id in 0..cfg.simulation.num_scouts {
             let scout = robot::Robot::new_scout(id, base_pos, tx.clone());
             {
                 let mut w = world.write().await;
                 w.robot_positions.insert(scout.id, scout.pos);
                 w.robot_kinds.insert(scout.id, robot::RobotKind::Scout);
             }
-            tokio::spawn(robot::run_scout(scout, world.clone()));
+            tokio::spawn(robot::run_scout(scout, world.clone(), scout_tick));
         }
 
-        // Spawn NUM_COLLECTORS collectors (ids NUM_SCOUTS..NUM_SCOUTS+NUM_COLLECTORS)
-        for id in NUM_SCOUTS..(NUM_SCOUTS + NUM_COLLECTORS) {
+        // Spawn collectors (ids num_scouts..num_scouts+num_collectors)
+        for id in cfg.simulation.num_scouts
+            ..(cfg.simulation.num_scouts + cfg.simulation.num_collectors)
+        {
             let collector = robot::Robot::new_collector(id, base_pos, tx.clone());
             {
                 let mut w = world.write().await;
                 w.robot_positions.insert(collector.id, collector.pos);
                 w.robot_kinds.insert(collector.id, robot::RobotKind::Collector);
             }
-            tokio::spawn(robot::run_collector(collector, world.clone()));
+            tokio::spawn(robot::run_collector(collector, world.clone(), collector_tick));
         }
     }
 
-    // 4. Spawn base task: reads messages from robots and updates world state
+    // 5. Spawn base task: reads messages from robots and updates world state
     let world_for_base = world.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -89,14 +94,15 @@ async fn main() -> color_eyre::Result<()> {
         }
     });
 
-    // 5. Main loop: redraw every 50ms, quit on keypress
+    // 6. Main loop: redraw at the configured interval, quit on keypress
+    let ui_poll = Duration::from_millis(cfg.simulation.ui_poll_ms);
     let result = async {
         loop {
             {
                 let world = world.read().await;
                 terminal.draw(|frame| ui::render(frame, &world))?;
             }
-            if crossterm::event::poll(Duration::from_millis(50))?
+            if crossterm::event::poll(ui_poll)?
                 && crossterm::event::read()?.is_key_press()
             {
                 return Ok(());
@@ -105,7 +111,7 @@ async fn main() -> color_eyre::Result<()> {
     }
     .await;
 
-    // 6. Always restore the terminal
+    // 7. Always restore the terminal
     ratatui::restore();
     result
 }

@@ -12,6 +12,8 @@ ratatui = "0.30.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 rand = "0.9"
 noise = "0.9"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [profile.release]
 codegen-units = 1
