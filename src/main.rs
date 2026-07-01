@@ -78,14 +78,14 @@ async fn main() -> color_eyre::Result<()> {
         }
     });
 
-    // 5. Main loop: redraw every 100ms, quit on keypress
+    // 5. Main loop: redraw every 50ms, quit on keypress
     let result = async {
         loop {
             {
                 let world = world.read().await;
                 terminal.draw(|frame| ui::render(frame, &world))?;
             }
-            if crossterm::event::poll(Duration::from_millis(100))?
+            if crossterm::event::poll(Duration::from_millis(50))?
                 && crossterm::event::read()?.is_key_press()
             {
                 return Ok(());

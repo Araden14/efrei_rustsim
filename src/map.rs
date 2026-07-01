@@ -72,7 +72,7 @@ impl Map {
                 .map(|(i, _)| i)
                 .choose_multiple(&mut rng, RESOURCES_PER_KIND);
             for idx in empty_indices {
-                let qty = rng.random_range(50..=200);
+                let qty = rng.random_range(10..=20);
                 self.cells[idx] = Cell::Resource(kind, qty);
             }
         }
