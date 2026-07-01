@@ -10,6 +10,9 @@ pub struct SharedWorld {
     pub robot_kinds: HashMap<usize, RobotKind>,
     pub energy_collected: u32,
     pub crystal_collected: u32,
+    /// Maps each collector id to the resource position it has been dispatched to.
+    /// A collector absent from this map is considered free and eligible for dispatch.
+    pub collector_targets: HashMap<usize, Pos>,
 }
 
 impl SharedWorld {
@@ -21,6 +24,7 @@ impl SharedWorld {
             robot_kinds: HashMap::new(),
             energy_collected: 0,
             crystal_collected: 0,
+            collector_targets: HashMap::new(),
         }
     }
 }

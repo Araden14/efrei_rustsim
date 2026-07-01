@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use world::SharedWorld;
 
 // Number of scouts and collectors to spawn
-const NUM_SCOUTS: usize = 3;
+const NUM_SCOUTS: usize = ;
 const NUM_COLLECTORS: usize = 2;
 
 #[tokio::main]
@@ -66,12 +66,47 @@ async fn main() -> color_eyre::Result<()> {
                 robot::RobotMessage::Discovered { pos, cell } => {
                     let mut w = world_for_base.write().await;
                     w.known_cells.insert(pos, cell);
+
+                    // If this is a resource that no collector is already heading toward,
+                    // dispatch the first free collector to it.
+                    if matches!(cell, map::Cell::Resource(_, _)) {
+                        let already_targeted = w.collector_targets.values().any(|&t| t == pos);
+                        if !already_targeted {
+                            let free_id = w
+                                .robot_kinds
+                                .iter()
+                                .filter(|(_, k)| **k == robot::RobotKind::Collector)
+                                .map(|(id, _)| *id)
+                                .find(|id| !w.collector_targets.contains_key(id));
+                            if let Some(collector_id) = free_id {
+                                w.collector_targets.insert(collector_id, pos);
+                            }
+                        }
+                    }
                 }
                 robot::RobotMessage::Collected { kind, amount } => {
                     let mut w = world_for_base.write().await;
                     match kind {
                         map::ResourceKind::Energy => w.energy_collected += amount,
                         map::ResourceKind::Crystal => w.crystal_collected += amount,
+                    }
+                }
+                robot::RobotMessage::CollectorIdle(id) => {
+                    let mut w = world_for_base.write().await;
+                    // Build the set of resource positions already claimed by other collectors.
+                    let already_targeted: std::collections::HashSet<map::Pos> =
+                        w.collector_targets.values().copied().collect();
+                    // Find any known resource that is not yet assigned to someone.
+                    let next_target = w
+                        .known_cells
+                        .iter()
+                        .filter_map(|(pos, cell)| match cell {
+                            map::Cell::Resource(_, amount) if *amount > 0 => Some(*pos),
+                            _ => None,
+                        })
+                        .find(|pos| !already_targeted.contains(pos));
+                    if let Some(resource_pos) = next_target {
+                        w.collector_targets.insert(id, resource_pos);
                     }
                 }
             }

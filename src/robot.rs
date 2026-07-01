@@ -32,6 +32,9 @@ pub enum RobotKind {
 pub enum RobotMessage {
     Discovered { pos: Pos, cell: Cell },
     Collected { kind: ResourceKind, amount: u32 },
+    /// Sent by a collector after it unloads at base or drops a stale target,
+    /// signalling to the base that it is free for a new dispatch assignment.
+    CollectorIdle(usize),
 }
 
 pub struct Robot {
@@ -136,15 +139,6 @@ impl Robot {
 }
 
 impl Robot {
-    pub fn step_collector(&mut self, world: &mut SharedWorld) -> Vec<RobotMessage> {
-        if self.kind != RobotKind::Collector {
-            return Vec::new();
-        }
-
-        let action = plan_collector_step(self, world);
-        apply_collector_action(self, world, action)
-    }
-
     fn collect_one_unit(
         &mut self,
         resource_pos: Pos,
@@ -175,6 +169,8 @@ impl Robot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CollectorAction {
     Idle,
+    /// The assigned target is no longer a valid resource; drop it and notify the base.
+    ClearTargetAndIdle,
     Move(Pos),
     MoveAndCollect { next: Pos, resource_pos: Pos },
     Collect(Pos),
@@ -197,16 +193,30 @@ fn plan_collector_step(robot: &Robot, world: &SharedWorld) -> CollectorAction {
             .unwrap_or(CollectorAction::Idle);
     }
 
-    let Some((resource_pos, next_step)) = nearest_known_resource_step(robot.pos, world) else {
+    // Look up the target assigned by the base dispatcher.
+    // If no target has been assigned yet, wait idly.
+    let Some(&target_pos) = world.collector_targets.get(&robot.id) else {
         return CollectorAction::Idle;
     };
 
-    if is_adjacent_or_same(robot.pos, resource_pos) {
-        CollectorAction::Collect(resource_pos)
-    } else if is_adjacent_or_same(next_step, resource_pos) {
+    // Verify the target is still a live resource in the known map.
+    // If it has been depleted or is no longer known, drop it and notify the base.
+    match world.known_cells.get(&target_pos) {
+        Some(Cell::Resource(_, amount)) if *amount > 0 => {}
+        _ => return CollectorAction::ClearTargetAndIdle,
+    }
+
+    let Some(next_step) = next_step_toward(robot.pos, target_pos, world) else {
+        // No path yet (unexplored terrain between here and target); wait.
+        return CollectorAction::Idle;
+    };
+
+    if is_adjacent_or_same(robot.pos, target_pos) {
+        CollectorAction::Collect(target_pos)
+    } else if is_adjacent_or_same(next_step, target_pos) {
         CollectorAction::MoveAndCollect {
             next: next_step,
-            resource_pos,
+            resource_pos: target_pos,
         }
     } else {
         CollectorAction::Move(next_step)
@@ -220,6 +230,10 @@ fn apply_collector_action(
 ) -> Vec<RobotMessage> {
     match action {
         CollectorAction::Idle => Vec::new(),
+        CollectorAction::ClearTargetAndIdle => {
+            world.collector_targets.remove(&robot.id);
+            vec![RobotMessage::CollectorIdle(robot.id)]
+        }
         CollectorAction::Move(next) => {
             robot.pos = next;
             Vec::new()
@@ -237,7 +251,8 @@ fn apply_collector_action(
             .collect(),
         CollectorAction::Unload => {
             robot.carrying = None;
-            Vec::new()
+            world.collector_targets.remove(&robot.id);
+            vec![RobotMessage::CollectorIdle(robot.id)]
         }
     }
 }
@@ -286,19 +301,6 @@ fn path_to(from: Pos, to: Pos, world: &SharedWorld) -> Option<(usize, Pos)> {
     }
 
     None
-}
-
-fn nearest_known_resource_step(from: Pos, world: &SharedWorld) -> Option<(Pos, Pos)> {
-    world
-        .known_cells
-        .iter()
-        .filter_map(|(pos, cell)| match cell {
-            Cell::Resource(_, amount) if *amount > 0 => Some(*pos),
-            _ => None,
-        })
-        .filter_map(|pos| path_to(from, pos, world).map(|(distance, next)| (pos, next, distance)))
-        .min_by_key(|(_, _, distance)| *distance)
-        .map(|(pos, next, _)| (pos, next))
 }
 
 fn cardinal_neighbors(pos: Pos) -> impl Iterator<Item = Pos> {
