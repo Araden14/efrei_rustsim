@@ -11,8 +11,8 @@ use tokio::sync::RwLock;
 use world::SharedWorld;
 
 // Number of scouts and collectors to spawn
-const NUM_SCOUTS: usize = 3;
-const NUM_COLLECTORS: usize = 2;
+const NUM_SCOUTS: usize = 10;
+const NUM_COLLECTORS: usize = 5;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
