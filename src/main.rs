@@ -14,18 +14,22 @@ use world::SharedWorld;
 const NUM_SCOUTS: usize = 10;
 const NUM_COLLECTORS: usize = 5;
 
+/// Left + right border of the map widget (1 char each).
+const MAP_BORDER_X: u16 = 2;
+/// Top + bottom border of the map widget (1 char each) + 1 char for the status bar.
+const MAP_BORDER_Y: u16 = 3;
+
 #[tokio::main]
-async fn main() -> color_eyre::Result<()> {
-    // 1. Set up error reporting and enter the TUI
-    color_eyre::install()?;
+async fn main() -> anyhow::Result<()> {
+    // 1. Enter the TUI
     let mut terminal = ratatui::init();
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<robot::RobotMessage>(256);
+    let (tx, rx) = tokio::sync::mpsc::channel::<robot::RobotMessage>(256);
 
     // 2. Generate the world
     let seed: u32 = rand::random();
     let (viewport_width, viewport_height) = crossterm::terminal::size()?;
-    let map_width = viewport_width.saturating_sub(2) as i32;
-    let map_height = viewport_height.saturating_sub(3) as i32;
+    let map_width  = viewport_width.saturating_sub(MAP_BORDER_X) as i32;
+    let map_height = viewport_height.saturating_sub(MAP_BORDER_Y) as i32;
     let world = Arc::new(RwLock::new(SharedWorld::new(Map::generate(
         map_width,
         map_height,
@@ -38,7 +42,7 @@ async fn main() -> color_eyre::Result<()> {
 
         // Spawn NUM_SCOUTS scouts (ids 0..NUM_SCOUTS)
         for id in 0..NUM_SCOUTS {
-            let scout = robot::Robot::new_scout(id, base_pos, tx.clone());
+            let scout = robot::Robot::new(id, robot::RobotKind::Scout, base_pos, tx.clone());
             {
                 let mut w = world.write().await;
                 w.robot_positions.insert(scout.id, scout.pos);
@@ -49,7 +53,7 @@ async fn main() -> color_eyre::Result<()> {
 
         // Spawn NUM_COLLECTORS collectors (ids NUM_SCOUTS..NUM_SCOUTS+NUM_COLLECTORS)
         for id in NUM_SCOUTS..(NUM_SCOUTS + NUM_COLLECTORS) {
-            let collector = robot::Robot::new_collector(id, base_pos, tx.clone());
+            let collector = robot::Robot::new(id, robot::RobotKind::Collector, base_pos, tx.clone());
             {
                 let mut w = world.write().await;
                 w.robot_positions.insert(collector.id, collector.pos);
@@ -60,34 +64,7 @@ async fn main() -> color_eyre::Result<()> {
     }
 
     // 4. Spawn base task: reads messages from robots and updates world state
-    let world_for_base = world.clone();
-    tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                robot::RobotMessage::Discovered { pos, cell } => {
-                    let mut w = world_for_base.write().await;
-                    w.known_cells.insert(pos, cell);
-                    // Any newly discovered resource may unblock idle collectors.
-                    if matches!(cell, map::Cell::Resource(_, _)) {
-                        dispatch_free_collectors(&mut w);
-                    }
-                }
-                robot::RobotMessage::Collected { kind, amount } => {
-                    let mut w = world_for_base.write().await;
-                    match kind {
-                        map::ResourceKind::Energy => w.energy_collected += amount,
-                        map::ResourceKind::Crystal => w.crystal_collected += amount,
-                    }
-                }
-                robot::RobotMessage::CollectorIdle(_id) => {
-                    // The collector already removed itself from collector_targets before
-                    // sending this message, so it will appear as free here.
-                    let mut w = world_for_base.write().await;
-                    dispatch_free_collectors(&mut w);
-                }
-            }
-        }
-    });
+    tokio::spawn(run_base(rx, world.clone()));
 
     // 5. Main loop: redraw every 50ms, quit on keypress
     let result = async {
@@ -110,6 +87,35 @@ async fn main() -> color_eyre::Result<()> {
     result
 }
 
+/// Reads robot messages and updates world state on behalf of the base.
+async fn run_base(
+    mut rx: tokio::sync::mpsc::Receiver<robot::RobotMessage>,
+    world: Arc<RwLock<SharedWorld>>,
+) {
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            robot::RobotMessage::Discovered { pos, cell } => {
+                let mut w = world.write().await;
+                w.known_cells.insert(pos, cell);
+                // Any newly discovered resource may unblock idle collectors.
+                if matches!(cell, map::Cell::Resource(_, _)) {
+                    dispatch_free_collectors(&mut w);
+                }
+            }
+            robot::RobotMessage::Collected { kind, amount } => {
+                let mut w = world.write().await;
+                w.record_collection(kind, amount);
+            }
+            robot::RobotMessage::CollectorIdle => {
+                // The collector already removed itself from collector_targets before
+                // sending this message, so it will appear as free here.
+                let mut w = world.write().await;
+                dispatch_free_collectors(&mut w);
+            }
+        }
+    }
+}
+
 /// Assign every unassigned collector to a resource, preferring the resource
 /// with the fewest collectors already heading toward it.
 ///
@@ -127,7 +133,7 @@ fn dispatch_free_collectors(world: &mut SharedWorld) {
 
     for collector_id in free_collectors {
         if let Some(target) = least_loaded_resource(world) {
-            world.collector_targets.insert(collector_id, target);
+            world.assign_collector(collector_id, target);
         }
     }
 }

@@ -12,15 +12,13 @@ const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
 
 // Moore neighborhood (8 surrounding cells) for discovery scanning
 const NEIGHBORS: [(i32, i32); 8] = [
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (-1, 0),
-    (1, 0),
-    (-1, 1),
-    (0, 1),
-    (1, 1),
+    (-1, -1), (0, -1), (1, -1),
+    (-1,  0),          (1,  0),
+    (-1,  1), (0,  1), (1,  1),
 ];
+
+/// Simulation tick duration shared by all robot tasks.
+const ROBOT_TICK_MS: u64 = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RobotKind {
@@ -34,13 +32,14 @@ pub enum RobotMessage {
     Collected { kind: ResourceKind, amount: u32 },
     /// Sent by a collector after it unloads at base or drops a stale target,
     /// signalling to the base that it is free for a new dispatch assignment.
-    CollectorIdle(usize),
+    CollectorIdle,
 }
 
 pub struct Robot {
     pub id: usize,
     pub kind: RobotKind,
     pub pos: Pos,
+    /// Cells discovered by this robot. Only populated for scouts; collectors leave this empty.
     pub known_cells: HashSet<Pos>,
     /// Channel to send discoveries and collection events to the base.
     pub tx: Sender<RobotMessage>,
@@ -49,21 +48,10 @@ pub struct Robot {
 }
 
 impl Robot {
-    pub fn new_scout(id: usize, pos: Pos, tx: Sender<RobotMessage>) -> Self {
+    pub fn new(id: usize, kind: RobotKind, pos: Pos, tx: Sender<RobotMessage>) -> Self {
         Robot {
             id,
-            kind: RobotKind::Scout,
-            pos,
-            known_cells: HashSet::new(),
-            tx,
-            carrying: None, // scouts never carry resources
-        }
-    }
-
-    pub fn new_collector(id: usize, pos: Pos, tx: Sender<RobotMessage>) -> Self {
-        Robot {
-            id,
-            kind: RobotKind::Collector,
+            kind,
             pos,
             known_cells: HashSet::new(),
             tx,
@@ -71,30 +59,23 @@ impl Robot {
         }
     }
 
-    /**
-     * Moves the scout one step in a random walkable direction, then scans the 8 surrounding cells for new discoveries.
-     * Returns `(moved, messages)` where `moved` is `false` when all four cardinal
-     * directions are blocked. The caller owns the decision of what to do when stuck.
-     */
+    /// Moves the scout one step in a random walkable direction, then scans the 8
+    /// surrounding cells for new discoveries. Returns `(moved, messages)` where
+    /// `moved` is `false` when all four cardinal directions are blocked.
     pub fn step_scout(&mut self, world: &SharedWorld) -> (bool, Vec<RobotMessage>) {
         let moved = self.move_randomly(world);
         let messages = self.scan_neighbors(world);
         (moved, messages)
     }
 
-    /**
-     * Picks a random walkable cardinal direction and moves one step.
-     * Returns `true` if the scout moved, `false` if all directions were blocked.
-     */
+    /// Picks a random walkable cardinal direction and moves one step.
+    /// Returns `true` if the scout moved, `false` if all directions were blocked.
     fn move_randomly(&mut self, world: &SharedWorld) -> bool {
         let mut dirs: Vec<(i32, i32)> = DIRECTIONS.to_vec();
         dirs.shuffle(&mut rand::rng());
 
         for (dx, dy) in dirs {
-            let candidate = Pos {
-                x: self.pos.x + dx,
-                y: self.pos.y + dy,
-            };
+            let candidate = self.pos.offset(dx, dy);
             match world.map.get(candidate) {
                 Some(Cell::Obstacle) | None => continue,
                 Some(_) => {
@@ -106,19 +87,14 @@ impl Robot {
         false
     }
 
-    /**
-     * Scans the 8 surrounding cells.
-     * For each position not yet in 'known_cells', records it locally and returns a 'Discovered' message for the base.
-     * Out-of-bounds neighbors are silently skipped and never marked as known.
-     */
+    /// Scans the 8 surrounding cells. For each position not yet in `known_cells`,
+    /// records it locally and returns a `Discovered` message for the base.
+    /// Out-of-bounds neighbors are silently skipped and never marked as known.
     fn scan_neighbors(&mut self, world: &SharedWorld) -> Vec<RobotMessage> {
         let mut messages = Vec::new();
 
         for (dx, dy) in NEIGHBORS {
-            let neighbor = Pos {
-                x: self.pos.x + dx,
-                y: self.pos.y + dy,
-            };
+            let neighbor = self.pos.offset(dx, dy);
 
             if self.known_cells.contains(&neighbor) {
                 continue;
@@ -126,19 +102,14 @@ impl Robot {
 
             if let Some(cell) = world.map.get(neighbor) {
                 self.known_cells.insert(neighbor);
-                messages.push(RobotMessage::Discovered {
-                    pos: neighbor,
-                    cell,
-                });
+                messages.push(RobotMessage::Discovered { pos: neighbor, cell });
             }
             // None means out of bounds -> skip silently, don't mark as known.
         }
 
         messages
     }
-}
 
-impl Robot {
     fn collect_one_unit(
         &mut self,
         resource_pos: Pos,
@@ -178,9 +149,7 @@ enum CollectorAction {
 }
 
 fn plan_collector_step(robot: &Robot, world: &SharedWorld) -> CollectorAction {
-    if robot.kind != RobotKind::Collector {
-        return CollectorAction::Idle;
-    }
+    debug_assert_eq!(robot.kind, RobotKind::Collector);
 
     if robot.carrying.is_some() {
         let base_pos = world.map.base_pos();
@@ -231,8 +200,8 @@ fn apply_collector_action(
     match action {
         CollectorAction::Idle => Vec::new(),
         CollectorAction::ClearTargetAndIdle => {
-            world.collector_targets.remove(&robot.id);
-            vec![RobotMessage::CollectorIdle(robot.id)]
+            world.free_collector(robot.id);
+            vec![RobotMessage::CollectorIdle]
         }
         CollectorAction::Move(next) => {
             robot.pos = next;
@@ -251,19 +220,17 @@ fn apply_collector_action(
             .collect(),
         CollectorAction::Unload => {
             robot.carrying = None;
-            world.collector_targets.remove(&robot.id);
-            vec![RobotMessage::CollectorIdle(robot.id)]
+            world.free_collector(robot.id);
+            vec![RobotMessage::CollectorIdle]
         }
     }
 }
 
+/// BFS from `from` toward `to` through known walkable cells.
+/// Returns the first step to take, or `None` if no path exists yet.
 fn next_step_toward(from: Pos, to: Pos, world: &SharedWorld) -> Option<Pos> {
-    path_to(from, to, world).map(|(_, next)| next)
-}
-
-fn path_to(from: Pos, to: Pos, world: &SharedWorld) -> Option<(usize, Pos)> {
     if from == to {
-        return Some((0, from));
+        return Some(from);
     }
 
     let mut frontier = VecDeque::from([from]);
@@ -290,12 +257,11 @@ fn path_to(from: Pos, to: Pos, world: &SharedWorld) -> Option<(usize, Pos)> {
         return None;
     }
 
-    let mut distance = 0;
+    // Walk the came_from chain backward from `to` to find the first step after `from`.
     let mut current = to;
-    while let Some(previous) = came_from.get(&current).copied() {
-        distance += 1;
+    while let Some(&previous) = came_from.get(&current) {
         if previous == from {
-            return Some((distance, current));
+            return Some(current);
         }
         current = previous;
     }
@@ -304,10 +270,7 @@ fn path_to(from: Pos, to: Pos, world: &SharedWorld) -> Option<(usize, Pos)> {
 }
 
 fn cardinal_neighbors(pos: Pos) -> impl Iterator<Item = Pos> {
-    DIRECTIONS.into_iter().map(move |(dx, dy)| Pos {
-        x: pos.x + dx,
-        y: pos.y + dy,
-    })
+    DIRECTIONS.into_iter().map(move |(dx, dy)| pos.offset(dx, dy))
 }
 
 fn is_known_walkable(pos: Pos, goal: Pos, world: &SharedWorld) -> bool {
@@ -319,7 +282,9 @@ fn is_known_walkable(pos: Pos, goal: Pos, world: &SharedWorld) -> bool {
         return matches!(
             world.known_cells.get(&pos),
             Some(Cell::Empty | Cell::Resource(_, _) | Cell::Base)
-        ) || matches!(world.map.get(pos), Some(Cell::Base));
+        )
+        // The base is always a valid destination even before scouts have discovered it.
+        || matches!(world.map.get(pos), Some(Cell::Base));
     }
 
     matches!(
@@ -341,7 +306,7 @@ fn manhattan_distance(a: Pos, b: Pos) -> i32 {
 ///   1. Read lock  → step_scout (movement + discovery)
 ///   2. Write lock → update robot_positions
 ///   3. No lock    → forward discovery messages to base via channel
-///   4. Sleep 200ms, or break if permanently stuck (obstacles are immovable)
+///   4. Sleep ROBOT_TICK_MS, or break if permanently stuck (obstacles are immovable)
 pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
     loop {
         // Compute movement + discoveries (read lock released before any await)
@@ -361,9 +326,8 @@ pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
             let _ = robot.tx.send(msg).await;
         }
 
-        // Do not force movement if scout is stuck
         if moved {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(ROBOT_TICK_MS)).await;
         } else {
             // Obstacles are permanent — stuck once means stuck forever. Stop the task.
             break;
@@ -390,6 +354,6 @@ pub async fn run_collector(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
             let _ = robot.tx.send(msg).await;
         }
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(ROBOT_TICK_MS)).await;
     }
 }

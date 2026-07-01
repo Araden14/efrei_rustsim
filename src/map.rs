@@ -4,7 +4,17 @@ pub struct Pos {
     pub y: i32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+impl Pos {
+    /// Returns a new position offset by `(dx, dy)`.
+    pub fn offset(self, dx: i32, dy: i32) -> Pos {
+        Pos {
+            x: self.x + dx,
+            y: self.y + dy,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ResourceKind {
     Energy,
     Crystal,
@@ -38,7 +48,11 @@ impl Map {
             .flat_map(|y| {
                 (0..width).map(move |x| {
                     let n = perlin.get([x as f64 * NOISE_SCALE, y as f64 * NOISE_SCALE]);
-                    if n > OBSTACLE_THRESHOLD { Cell::Obstacle } else { Cell::Empty }
+                    if n > OBSTACLE_THRESHOLD {
+                        Cell::Obstacle
+                    } else {
+                        Cell::Empty
+                    }
                 })
             })
             .collect();
@@ -46,7 +60,7 @@ impl Map {
         // keep the base and the tile ring around it walkable
         for dy in -1..=1 {
             for dx in -1..=1 {
-                let p = Pos { x: base.x + dx, y: base.y + dy };
+                let p = base.offset(dx, dy);
                 if p.x >= 0 && p.y >= 0 && p.x < width && p.y < height {
                     cells[(p.y * width + p.x) as usize] = Cell::Empty;
                 }
@@ -54,13 +68,17 @@ impl Map {
         }
         cells[(base.y * width + base.x) as usize] = Cell::Base;
 
-        let mut map = Map { width, height, cells };
+        let mut map = Map {
+            width,
+            height,
+            cells,
+        };
         map.scatter_resources(seed);
         map
     }
 
     fn scatter_resources(&mut self, seed: u32) {
-        use rand::{Rng, SeedableRng, rngs::StdRng, seq::IteratorRandom};
+        use rand::{rngs::StdRng, seq::IteratorRandom, Rng, SeedableRng};
 
         let mut rng = StdRng::seed_from_u64(u64::from(seed) ^ 0x5EED);
         for kind in [ResourceKind::Energy, ResourceKind::Crystal] {
@@ -72,21 +90,21 @@ impl Map {
                 .map(|(i, _)| i)
                 .choose_multiple(&mut rng, RESOURCES_PER_KIND);
             for idx in empty_indices {
-                let qty = rng.random_range(10..=20);
+                let qty = rng.random_range(50..=200);
                 self.cells[idx] = Cell::Resource(kind, qty);
             }
         }
     }
 
     pub fn get(&self, pos: Pos) -> Option<Cell> {
-        if pos.x < 0 || pos.y < 0 || pos.x >= self.width || pos.y >= self.height {
+        if !self.in_bounds(pos) {
             return None;
         }
         Some(self.cells[(pos.y * self.width + pos.x) as usize])
     }
 
     pub fn set(&mut self, pos: Pos, cell: Cell) {
-        if pos.x >= 0 && pos.y >= 0 && pos.x < self.width && pos.y < self.height {
+        if self.in_bounds(pos) {
             self.cells[(pos.y * self.width + pos.x) as usize] = cell;
         }
     }
@@ -96,7 +114,14 @@ impl Map {
     }
 
     fn base_pos_for(width: i32, height: i32) -> Pos {
-        Pos { x: width / 2, y: height / 2 }
+        Pos {
+            x: width / 2,
+            y: height / 2,
+        }
+    }
+
+    fn in_bounds(&self, pos: Pos) -> bool {
+        pos.x >= 0 && pos.y >= 0 && pos.x < self.width && pos.y < self.height
     }
 }
 
@@ -107,7 +132,10 @@ mod tests {
     #[test]
     fn generate_places_base_obstacles_and_resources() {
         let map = Map::generate(60, 30, 42);
-        assert_eq!(map.get(Map::base_pos_for(map.width, map.height)), Some(Cell::Base));
+        assert_eq!(
+            map.get(Map::base_pos_for(map.width, map.height)),
+            Some(Cell::Base)
+        );
 
         let mut obstacles = 0usize;
         let mut energy = 0usize;

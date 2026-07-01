@@ -1,4 +1,4 @@
-use crate::map::{Cell, Map, Pos};
+use crate::map::{Cell, Map, Pos, ResourceKind};
 use crate::robot::RobotKind;
 use std::collections::HashMap;
 
@@ -25,6 +25,24 @@ impl SharedWorld {
             energy_collected: 0,
             crystal_collected: 0,
             collector_targets: HashMap::new(),
+        }
+    }
+
+    /// Assign a collector to a target resource position.
+    pub fn assign_collector(&mut self, id: usize, target: Pos) {
+        self.collector_targets.insert(id, target);
+    }
+
+    /// Mark a collector as free (no active target).
+    pub fn free_collector(&mut self, id: usize) {
+        self.collector_targets.remove(&id);
+    }
+
+    /// Increment the running total for the given resource kind.
+    pub fn record_collection(&mut self, kind: ResourceKind, amount: u32) {
+        match kind {
+            ResourceKind::Energy => self.energy_collected += amount,
+            ResourceKind::Crystal => self.crystal_collected += amount,
         }
     }
 }

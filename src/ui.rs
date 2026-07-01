@@ -1,12 +1,12 @@
-use crate::map::{Cell, Pos};
+use crate::map::{Cell, Pos, ResourceKind};
 use crate::robot::RobotKind;
 use crate::world::SharedWorld;
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
+    Frame,
 };
 use std::collections::HashMap;
 
@@ -15,8 +15,8 @@ fn cell_glyph(cell: Cell) -> (char, Color) {
     match cell {
         Cell::Empty => (' ', Color::Reset),
         Cell::Obstacle => ('O', Color::LightCyan),
-        Cell::Resource(crate::map::ResourceKind::Energy, _) => ('E', Color::Yellow),
-        Cell::Resource(crate::map::ResourceKind::Crystal, _) => ('C', Color::LightMagenta),
+        Cell::Resource(ResourceKind::Energy, _) => ('E', Color::Yellow),
+        Cell::Resource(ResourceKind::Crystal, _) => ('C', Color::LightMagenta),
         Cell::Base => ('#', Color::LightGreen),
     }
 }
@@ -30,9 +30,11 @@ fn robot_glyph(kind: RobotKind) -> (char, Color) {
 }
 
 pub fn render(frame: &mut Frame, world: &SharedWorld) {
-    let [map_area, status_area] =
-        Layout::new(Direction::Vertical, [Constraint::Min(0), Constraint::Length(1)])
-            .areas(frame.area());
+    let [map_area, status_area] = Layout::new(
+        Direction::Vertical,
+        [Constraint::Min(0), Constraint::Length(1)],
+    )
+    .areas(frame.area());
 
     let map = &world.map;
 
@@ -55,7 +57,8 @@ pub fn render(frame: &mut Frame, world: &SharedWorld) {
                         let (glyph, color) = robot_glyph(*kind);
                         return Span::styled(glyph.to_string(), Style::default().fg(color));
                     }
-                    let cell = map.get(pos).unwrap_or(Cell::Empty);
+                    // pos is constructed from map dimensions and is always in bounds.
+                    let cell = map.get(pos).expect("pos is always in bounds");
                     let (glyph, color) = cell_glyph(cell);
                     Span::styled(glyph.to_string(), Style::default().fg(color))
                 })
@@ -76,15 +79,15 @@ pub fn render(frame: &mut Frame, world: &SharedWorld) {
         for x in 0..map.width {
             if let Some(Cell::Resource(kind, amount)) = map.get(Pos { x, y }) {
                 match kind {
-                    crate::map::ResourceKind::Energy => energy_remaining += amount,
-                    crate::map::ResourceKind::Crystal => crystal_remaining += amount,
+                    ResourceKind::Energy => energy_remaining += amount,
+                    ResourceKind::Crystal => crystal_remaining += amount,
                 }
             }
         }
     }
 
     let status = format!(
-        "robots: {}  |  collected  E: {}  C: {}  |  remaining  E: {}  C: {}  |  (any key to quit)",
+        "robots: {} | collected E: {} C: {} | remaining E: {} C: {} | (any key to quit)",
         world.robot_positions.len(),
         world.energy_collected,
         world.crystal_collected,
