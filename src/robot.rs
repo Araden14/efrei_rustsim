@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 // Cardinal directions for movement: N, S, W, E
 const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
@@ -40,13 +40,13 @@ pub struct Robot {
     pub pos: Pos,
     pub known_cells: HashSet<Pos>,
     /// Channel to send discoveries and collection events to the base.
-    pub tx: UnboundedSender<RobotMessage>,
+    pub tx: Sender<RobotMessage>,
     /// Resource the collector is currently carrying (None for scouts or idle collectors).
     pub carrying: Option<ResourceKind>,
 }
 
 impl Robot {
-    pub fn new_scout(id: usize, pos: Pos, tx: UnboundedSender<RobotMessage>) -> Self {
+    pub fn new_scout(id: usize, pos: Pos, tx: Sender<RobotMessage>) -> Self {
         Robot {
             id,
             kind: RobotKind::Scout,
@@ -57,7 +57,7 @@ impl Robot {
         }
     }
 
-    pub fn new_collector(id: usize, pos: Pos, tx: UnboundedSender<RobotMessage>) -> Self {
+    pub fn new_collector(id: usize, pos: Pos, tx: Sender<RobotMessage>) -> Self {
         Robot {
             id,
             kind: RobotKind::Collector,
@@ -135,6 +135,42 @@ impl Robot {
     }
 }
 
+impl Robot {
+    pub fn step_collector(&mut self, world: &mut SharedWorld) -> Vec<RobotMessage> {
+        if self.kind != RobotKind::Collector {
+            return Vec::new();
+        }
+
+        let action = plan_collector_step(self, world);
+        apply_collector_action(self, world, action)
+    }
+
+    fn collect_one_unit(
+        &mut self,
+        resource_pos: Pos,
+        world: &mut SharedWorld,
+    ) -> Option<RobotMessage> {
+        let Some(Cell::Resource(kind, amount)) = world.map.get(resource_pos) else {
+            world.known_cells.remove(&resource_pos);
+            return None;
+        };
+        if amount == 0 {
+            world.known_cells.remove(&resource_pos);
+            return None;
+        }
+
+        let updated_cell = if amount == 1 {
+            Cell::Empty
+        } else {
+            Cell::Resource(kind, amount - 1)
+        };
+        world.map.set(resource_pos, updated_cell);
+        world.known_cells.insert(resource_pos, updated_cell);
+
+        self.carrying = Some(kind);
+        Some(RobotMessage::Collected { kind, amount: 1 })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CollectorAction {
@@ -298,44 +334,6 @@ fn manhattan_distance(a: Pos, b: Pos) -> i32 {
     (a.x - b.x).abs() + (a.y - b.y).abs()
 }
 
-impl Robot {
-    pub fn step_collector(&mut self, world: &mut SharedWorld) -> Vec<RobotMessage> {
-        if self.kind != RobotKind::Collector {
-            return Vec::new();
-        }
-
-        let action = plan_collector_step(self, world);
-        apply_collector_action(self, world, action)
-    }
-
-    fn collect_one_unit(
-        &mut self,
-        resource_pos: Pos,
-        world: &mut SharedWorld,
-    ) -> Option<RobotMessage> {
-        let Some(Cell::Resource(kind, amount)) = world.map.get(resource_pos) else {
-            world.known_cells.remove(&resource_pos);
-            return None;
-        };
-        if amount == 0 {
-            world.known_cells.remove(&resource_pos);
-            return None;
-        }
-
-        let updated_cell = if amount == 1 {
-            Cell::Empty
-        } else {
-            Cell::Resource(kind, amount - 1)
-        };
-        world.map.set(resource_pos, updated_cell);
-        world.known_cells.insert(resource_pos, updated_cell);
-
-        self.carrying = Some(kind);
-        Some(RobotMessage::Collected { kind, amount: 1 })
-    }
-}
-
-
 /// Async task that drives a single scout for the lifetime of the simulation.
 ///
 ///   1. Read lock  → step_scout (movement + discovery)
@@ -358,7 +356,7 @@ pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
 
         // Forward discoveries to the base — no lock held
         for msg in messages {
-            let _ = robot.tx.send(msg);
+            let _ = robot.tx.send(msg).await;
         }
 
         // Do not force movement if scout is stuck
@@ -387,7 +385,7 @@ pub async fn run_collector(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
         };
 
         for msg in messages {
-            let _ = robot.tx.send(msg);
+            let _ = robot.tx.send(msg).await;
         }
 
         tokio::time::sleep(Duration::from_millis(200)).await;
