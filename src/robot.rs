@@ -4,8 +4,8 @@ use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::UnboundedSender;
 
 // Cardinal directions for movement: N, S, W, E
 const DIRECTIONS: [(i32, i32); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
@@ -40,13 +40,13 @@ pub struct Robot {
     pub pos: Pos,
     pub known_cells: HashSet<Pos>,
     /// Channel to send discoveries and collection events to the base.
-    pub tx: Sender<RobotMessage>,
+    pub tx: UnboundedSender<RobotMessage>,
     /// Resource the collector is currently carrying (None for scouts or idle collectors).
     pub carrying: Option<ResourceKind>,
 }
 
 impl Robot {
-    pub fn new_scout(id: usize, pos: Pos, tx: Sender<RobotMessage>) -> Self {
+    pub fn new_scout(id: usize, pos: Pos, tx: UnboundedSender<RobotMessage>) -> Self {
         Robot {
             id,
             kind: RobotKind::Scout,
@@ -54,6 +54,17 @@ impl Robot {
             known_cells: HashSet::new(),
             tx,
             carrying: None, // scouts never carry resources
+        }
+    }
+
+    pub fn new_collector(id: usize, pos: Pos, tx: UnboundedSender<RobotMessage>) -> Self {
+        Robot {
+            id,
+            kind: RobotKind::Collector,
+            pos,
+            known_cells: HashSet::new(),
+            tx,
+            carrying: None,
         }
     }
 
@@ -146,7 +157,7 @@ pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
 
         // Forward discoveries to the base — no lock held
         for msg in messages {
-            let _ = robot.tx.send(msg).await;
+            let _ = robot.tx.send(msg);
         }
 
         // Do not force movement if scout is stuck
@@ -156,5 +167,28 @@ pub async fn run_scout(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
             // Obstacles are permanent — stuck once means stuck forever. Stop the task.
             break;
         }
+    }
+}
+
+/// Async task that drives a single collector for the lifetime of the simulation.
+pub async fn run_collector(mut robot: Robot, world: Arc<RwLock<SharedWorld>>) {
+    loop {
+        let action = {
+            let world_guard = world.read().await;
+            plan_collector_step(&robot, &world_guard)
+        };
+
+        let messages = {
+            let mut world_guard = world.write().await;
+            let messages = apply_collector_action(&mut robot, &mut world_guard, action);
+            world_guard.robot_positions.insert(robot.id, robot.pos);
+            messages
+        };
+
+        for msg in messages {
+            let _ = robot.tx.send(msg);
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }

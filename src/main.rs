@@ -14,7 +14,7 @@ async fn main() -> color_eyre::Result<()> {
     // 1. set up error reporting and enter the TUI (raw mode + alternate screen)
     color_eyre::install()?;
     let mut terminal = ratatui::init();
-    let (tx, rx) = tokio::sync::mpsc::channel::<robot::RobotMessage>(100);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<robot::RobotMessage>();
 
     // 2. generate the world, sized to fit the map area (terminal minus the
     //    bordered block's 2 rows/cols and the 1-row status bar) so the base
