@@ -72,7 +72,7 @@ impl Map {
                 .map(|(i, _)| i)
                 .choose_multiple(&mut rng, RESOURCES_PER_KIND);
             for idx in empty_indices {
-                let qty = rng.random_range(50..=200);
+                let qty = rng.random_range(10..=20);
                 self.cells[idx] = Cell::Resource(kind, qty);
             }
         }
@@ -117,11 +117,11 @@ mod tests {
                 match map.get(Pos { x, y }).unwrap() {
                     Cell::Obstacle => obstacles += 1,
                     Cell::Resource(ResourceKind::Energy, qty) => {
-                        assert!((50..=200).contains(&qty));
+                        assert!((10..=20).contains(&qty));
                         energy += 1;
                     }
                     Cell::Resource(ResourceKind::Crystal, qty) => {
-                        assert!((50..=200).contains(&qty));
+                        assert!((10..=20).contains(&qty));
                         crystal += 1;
                     }
                     _ => {}
